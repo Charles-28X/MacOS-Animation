@@ -1,151 +1,294 @@
-# MacOS-Animation
- # macOS Window Animations for Windows
+# macOS Window Animations — Exact Taskbar Button Edition
 
-Bring the visual feel of macOS window transitions to Windows.
 
-**macOS Window Animations** is a Windhawk mod that recreates macOS-inspired close, open, and minimize animations using window capture, layered overlays, and a custom software renderer.
+This mod replaces the default Windows window transitions with smooth, elegant, macOS-inspired animations:
 
-The goal is to reproduce the characteristic macOS experience while working within the Windows desktop environment.
+- **Close**: the window gently shrinks and fades out.
+- **Open**: the window pops in with a subtle, natural overshoot.
+- **Minimize**: the window flows into the taskbar using a true genie-style funnel.
+- **Exact taskbar targeting**: the genie now attempts to aim at the actual taskbar button of the app, not just the center of the taskbar.
 
-## Features
-
-| Action       | Animation       | Description                                                                                            |
-| ------------ | --------------- | ------------------------------------------------------------------------------------------------------ |
-| **Close**    | Shrink & Fade   | The window smoothly scales down and fades out while retaining rounded corners and a soft shadow.       |
-| **Open**     | Pop-In          | The window appears from approximately 92% scale while fading in. Experimental and disabled by default. |
-| **Minimize** | Genie           | The window collapses toward the taskbar through a curved, per-scanline warp inspired by macOS.         |
-| **Minimize** | Scale           | The window smoothly shrinks toward the taskbar.                                                        |
-| **Restore**  | Windows Default | Restoring a minimized window uses the native Windows animation.                                        |
-
-### Animation Preview
-
-The animations are configurable, including their duration, scale, shadow, and minimize style.
-
-## How It Works
-
-### 1. Understanding the macOS Approach
-
-macOS window transitions do not simply move the original application window. The WindowServer uses a visual representation of the window and applies transformations to it.
-
-The effects can be approximated as follows:
-
-**Close / Open**
-
-* Uniform scaling, typically around 0.92–0.95.
-* Opacity transitions.
-* Short durations, approximately 150–250 ms.
-* Decelerating animation curves.
-* Window shadows retained during the transition.
-
-**Genie Minimize**
-
-The macOS Genie effect uses a private WindowServer API, `CGSSetWindowWarp`, to apply a mesh deformation.
-
-Its characteristic behavior can be approximated using:
-
-* Per-scanline horizontal compression.
-* Different arrival times for individual rows.
-* Rows closer to the Dock reaching it first.
-* Sigmoid-based deformation for the window edges.
-
-Similar concepts have appeared in Compiz Magic Lamp and KWin Magic Lamp.
-
-### 2. Windows Implementation
-
-This mod recreates these effects in user mode rather than modifying the Windows compositor.
-
-The animation pipeline works as follows:
-
-1. **Window Capture:** Captures the window using `PrintWindow`.
-2. **Visual Processing:** Applies rounded corners and generates a synthetic soft shadow.
-3. **Overlay Rendering:** Displays the captured image through a click-through layered overlay.
-4. **Animation Engine:** Uses a software renderer with integer bilinear interpolation and per-scanline processing to produce the Genie deformation.
-5. **Transition Control:** Disables the original Windows transition for the animated window to prevent overlapping animations.
-6. **Window Event Hooks:** Intercepts `DestroyWindow`, `ShowWindow`, and `DefWindowProc` to detect close, minimize, and visibility events.
-
-The hooks also allow the mod to catch certain windows that Windows closes or minimizes internally.
-
-## Configuration
-
-All settings can be managed through Windhawk.
-
-| Setting                | Default        | Description                                                    |
-| ---------------------- | -------------- | -------------------------------------------------------------- |
-| Close animation        | Enabled        | Enables the close transition.                                  |
-| Close duration         | 180 ms         | Controls how long the closing animation lasts.                 |
-| Close scale            | 95%            | Determines the final scale before the window disappears.       |
-| Open animation         | Disabled       | Enables the experimental opening transition.                   |
-| Open duration          | 220 ms         | Controls the opening animation duration.                       |
-| Open scale             | 92%            | Determines the initial scale of the opening window.            |
-| Minimize style         | Genie          | Selects Genie, Scale, or the native Windows animation.         |
-| Minimize duration      | 420 ms         | Controls the minimize animation duration.                      |
-| Genie target           | Taskbar centre | Determines the approximate destination of the Genie animation. |
-| Window shadow          | Enabled        | Draws a synthetic shadow around the captured window.           |
-| Animate hidden windows | Enabled        | Also animates windows that hide instead of being destroyed.    |
-| Hook DefWindowProc     | Enabled        | Detects default Windows close and minimize handling.           |
-| Excluded programs      | Configurable   | Prevents the mod from loading in specified applications.       |
-
-### Available Minimize Styles
-
-**Genie (macOS)**
-Creates a curved deformation that compresses the window toward the taskbar.
-
-**Scale**
-Shrinks the window toward the taskbar without the Genie deformation.
-
-**Off**
-Disables the custom minimize animation and uses the native Windows behavior.
-
-### Excluded Programs
-
-Applications can be excluded by executable name.
-
-The default exclusion list includes:
-
-```text
-vgc.exe
-LeagueClient.exe
-VALORANT.exe
-EasyAntiCheat.exe
-BEService.exe
-```
-
-This is particularly useful for games, anti-cheat software, and applications that may conflict with window hooks or overlays.
-
-## Compatibility & Limitations
-
-There are some important implementation constraints:
-
-* **Animation effects:** Animations are disabled when Windows' Animation Effects setting is turned off.
-* **Remote sessions:** Custom animations are not performed in remote sessions.
-* **Excluded windows:** Menus, tooltips, tool windows, and shell windows are not animated.
-* **Taskbar position:** Genie works with taskbars positioned along the top or bottom edge. Left- and right-aligned taskbars use the Scale effect instead.
-* **Genie destination:** The animation targets the approximate taskbar centre or a position below the window. Windows does not expose a public API for obtaining individual taskbar button positions.
-* **Restore animation:** Restoring a minimized window uses the native Windows animation because the original live window image is no longer available for deformation.
-* **UI thread:** The animated window's UI thread waits for the animation to finish. This prevents the process from exiting before the transition completes.
-* **Capture limitations:** Some applications may not produce a usable image through `PrintWindow`.
-
-### Experimental Open Animation
-
-The opening animation is disabled by default.
-
-To capture the initial window image, the mod briefly cloaks the window. If cloaking or image capture fails, the window opens normally.
-
-Some applications may not behave correctly with this process. Disable the opening animation if you encounter application-specific issues.
-
-## Performance & Rendering
-
-The mod performs its animations using captured window images and a software-based rendering pipeline.
-
-The Genie effect uses per-scanline deformation rather than simply scaling the entire window. This allows different portions of the captured image to reach the taskbar at different times.
-
-Performance and visual results may vary depending on the application, window contents, and capture behavior.
-
-## Credits & Links
-
-**Author:** [Charles-28X](https://github.com/Charles-28X)
-
+The result should feel clean, fluid, and satisfying — like a native desktop animation.
 
 ---
 
-*Inspired by macOS window animations and implemented for the Windows desktop using Windhawk.*
+## Features
+
+### macOS-style close animation
+When a window is closed, it shrinks slightly while fading out.
+
+This gives a softer, more polished exit compared to the abrupt Windows close behavior.
+
+### macOS-style open animation
+When enabled, newly opened windows appear with a gentle pop-in effect.
+
+The animation uses a custom easing curve with a small overshoot, similar to the lively feel of macOS window appearance.
+
+> This feature is experimental and disabled by default because some apps may not render correctly before their first frame is ready.
+
+### Genie minimize animation
+When minimizing, the window is captured as a snapshot and warped into the taskbar through a curved funnel.
+
+The effect is designed to feel like the classic macOS genie animation:
+
+- The bottom of the window collapses into a neck.
+- The window content flows downward.
+- The animation accelerates naturally.
+- The window disappears into the taskbar button area.
+
+### Exact taskbar button targeting
+The mod uses UI Automation to locate the taskbar button associated with the window being minimized.
+
+This allows the genie animation to aim at the correct taskbar button instead of guessing.
+
+If the exact button cannot be found, the mod falls back safely to:
+
+- Taskbar center, or
+- Straight below the window, depending on your setting.
+
+### Soft shadow
+The animation draws a soft synthetic shadow around the captured window.
+
+This helps the animation feel more natural and prevents the window snapshot from looking flat.
+
+### Rounded corners
+On Windows 11, the mod respects the window’s rounded-corner preference where possible.
+
+### High-quality rendering
+The animation renderer uses:
+
+- Mipmapped scaling
+- Box filtering
+- Anti-aliased edges
+- Dirty-rectangle updates
+- Multi-threaded rendering
+- Frame pacing based on display refresh timing
+
+This helps keep the animation smooth and reduces shimmering when the window is compressed.
+
+### Shift slow motion
+Like macOS, holding **Shift** while minimizing plays the animation in slow motion.
+
+This can be disabled in the settings.
+
+---
+
+## Minimize styles
+
+| Style | Description |
+|---|---|
+| Genie | macOS-style funnel animation. |
+| Scale | Simple shrink-toward-taskbar animation. |
+| Off | Uses normal Windows behavior. |
+
+---
+
+## Settings
+
+### Close animation
+Enables or disables the animated close effect.
+
+### Close duration
+How long the close animation lasts.
+
+Recommended: **150–220 ms**
+
+### Close shrink to
+Final size of the window before it disappears.
+
+Example:
+
+- `95%` = subtle shrink
+- `85%` = more visible shrink
+- `100%` = fade only
+
+### Open animation
+Enables the pop-in animation when a window is shown.
+
+Experimental. If an app flashes, misbehaves, or opens incorrectly, disable this option.
+
+### Open duration
+Duration of the open animation.
+
+Recommended: **180–260 ms**
+
+### Open starts at
+Initial scale of the window when opening.
+
+Recommended: **90–94%**
+
+### Minimize style
+Choose between:
+
+- Genie
+- Scale
+- Off
+
+### Minimize duration
+Duration of the minimize animation.
+
+Recommended: **400–550 ms**
+
+For a more dramatic macOS-like feel, use around **500 ms**.
+
+For a snappier feel, use around **350–420 ms**.
+
+### Genie fallback target
+Used only if the exact taskbar button cannot be found.
+
+Options:
+
+- **Taskbar centre**
+- **Below window**
+
+### Hold Shift for slow motion
+Plays the minimize animation much slower while Shift is held.
+
+### Draw shadow
+Draws a soft shadow behind the animated window snapshot.
+
+### Shadow strength
+Controls how strong the synthetic shadow appears.
+
+If you notice a visible shadow jump when the animation ends, adjust this setting until it matches your system shadow more closely.
+
+### Animate hidden windows
+Some apps hide their window instead of destroying it when closed.
+
+This is common in:
+
+- Chrome
+- Electron apps
+- Tray apps
+- Messaging apps
+
+Enable this if you want those windows to animate when hidden.
+
+### Hook DefWindowProc
+Allows the mod to catch minimize and close actions that are handled internally by Windows.
+
+This improves compatibility with apps such as File Explorer and many native Win32 programs.
+
+### Excluded programs
+Processes listed here will not use the mod.
+
+Useful for:
+
+- Games
+- Anti-cheat software
+- Screen-capture tools
+- Apps with custom rendering
+- Misbehaving apps
+
+Example:
+
+```txt
+game.exe
+launcher.exe
+anticheat.exe
+```
+
+---
+
+## Recommended settings for the most macOS-like feel
+
+For a clean, natural macOS-style experience:
+
+| Setting | Recommended value |
+|---|---|
+| Close animation | Enabled |
+| Close duration | 170–190 ms |
+| Close shrink to | 93–96% |
+| Open animation | Optional |
+| Open duration | 210–230 ms |
+| Open starts at | 92% |
+| Minimize style | Genie |
+| Minimize duration | 450–520 ms |
+| Shadow | Enabled |
+| Shadow strength | 35–55% |
+| Shift slow motion | Enabled |
+
+---
+
+## Notes and limitations
+
+- The animation uses a snapshot of the window. Live video, DRM-protected content, or GPU-exclusive surfaces may not capture correctly.
+- Some apps may appear black or blank during capture. Those apps will automatically fall back to normal behavior when possible.
+- Restoring a minimized window uses the normal Windows restore animation because a minimized window does not have a live visual snapshot to warp.
+- If your taskbar is auto-hidden, the genie may target the hidden taskbar position.
+- On vertical taskbars, the genie effect may fall back to the scale animation.
+- The open animation is experimental because some apps need a moment before their first frame is rendered.
+- If an app misbehaves, add it to the excluded programs list.
+
+---
+
+## Troubleshooting
+
+### The genie does not hit the exact taskbar button
+Possible reasons:
+
+- The taskbar button does not expose a valid accessible name.
+- The window title does not match the taskbar button name.
+- The taskbar is hidden, moved, or heavily customized.
+- The taskbar uses a third-party modification.
+- The app is grouped in a way that prevents reliable detection.
+
+The mod will automatically fall back to the selected fallback target.
+
+### The animation flickers
+Try:
+
+- Lowering the shadow strength.
+- Disabling open animation.
+- Excluding the affected app.
+- Disabling third-party taskbar mods temporarily.
+
+### A window closes without animation
+This can happen if:
+
+- The window is too small.
+- The window is a popup, tooltip, menu, or tool window.
+- The capture failed.
+- The app is excluded.
+- Windows animation effects are disabled.
+- The app hides itself in an unsupported way.
+
+### The animation looks too fast or too slow
+Adjust the duration settings.
+
+For macOS-like motion:
+
+- Close: around **180 ms**
+- Open: around **220 ms**
+- Minimize: around **450–500 ms**
+
+---
+
+## Why it feels smooth
+
+This mod uses custom easing curves instead of simple linear motion.
+
+- Close uses an accelerating fade/shrink.
+- Open uses a soft overshoot curve.
+- Genie uses a fluid travel curve that starts gently and accelerates into the dock.
+- Edges are filtered to reduce aliasing.
+- Frames are paced against the display refresh to avoid uneven motion.
+
+The goal is not just animation, but animation that feels natural.
+
+---
+
+## Credits
+
+Original animation engine and concept by **Charles-28X**.
+**Github Repo**-https://github.com/Charles-28X/MacOS-Animation
+
+Inspired by macOS window transitions and Dock behavior.
+
+This enhanced version improves:
+
+- Exact taskbar button targeting
+- Compile compatibility
+- Easing smoothness
+- Open-animation clipping
+- Fallback reliability
