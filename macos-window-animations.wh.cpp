@@ -1,8 +1,8 @@
 // ==WindhawkMod==
 // @id              macos-window-animations
-// @name            macOS Window Animations (Close / Open / Genie)
-// @description     macOS-style window animations: shrink-and-fade close, pop-in open, and Genie / Scale minimize, with soft shadow and rounded corners
-// @version         2.0.0
+// @name            macOS Window Animations (Exact Taskbar Button)
+// @description     macOS-style close/open/minimize animations with exact taskbar button targeting, smooth easing, shadows and rounded corners.
+// @version         1.0.0
 // @author          Charles-28X
 // @github          https://github.com/Charles-28X
 // @include         *
@@ -15,6 +15,7 @@
 // @exclude         StartMenuExperienceHost.exe
 // @exclude         ShellExperienceHost.exe
 // @exclude         TextInputHost.exe
+// @compilerOptions -lole32 -loleaut32 -luuid
 // @license         MIT
 // ==/WindhawkMod==
 
@@ -25,59 +26,13 @@
 
 // ==WindhawkModReadme==
 /*
-# macOS Window Animations
+macOS Window Animations (Exact Taskbar Button)
 
-Close, open and minimize animations modelled on macOS.
-
-| Action   | Effect |
-|----------|--------|
-| Close    | The window shrinks slightly and fades out, keeping shadow and rounded corners. |
-| Open     | The window pops in from ~92% size while fading in (experimental, off by default). |
-| Minimize | **Genie**: the window is sucked into the taskbar through a curved funnel. **Scale**: the window shrinks into the taskbar. |
-
-## How it works (reverse-engineering notes)
-
-macOS does not animate the real window. The WindowServer takes a snapshot and
-applies a transform to it:
-
-* Close / open: a uniform scale (~0.92-0.95) plus an opacity ramp, roughly
-  0.15-0.25 s, with a decelerating curve. The window keeps its shadow.
-* Genie: private `CGSSetWindowWarp` applies a mesh warp. In practice it is a
-  per-scanline horizontal squeeze. Each row has its own arrival time at the
-  Dock, rows nearest the Dock arrive first, and the sides follow a sigmoid
-  (S-shaped) curve. Compiz "Magic Lamp" and KWin "Magic Lamp" use the same idea.
-
-This mod copies that approach in user mode:
-
-1. The window is captured with `PrintWindow`.
-2. The picture gets rounded corners and a synthetic soft shadow.
-3. A click-through layered overlay shows the picture and a software
-   renderer (integer bilinear, per-scanline) plays the warp.
-4. Windows' own transition is disabled for that window, so the two
-   animations never stack.
-5. The mod hooks `DestroyWindow`, `ShowWindow` and `DefWindowProc`
-   (`WM_CLOSE`, `WM_SYSCOMMAND/SC_MINIMIZE`), so it also catches windows
-   that Windows closes or minimizes internally.
-
-## Notes and limits
-
-* The UI thread of the animated window waits for the animation to finish,
-  so the process cannot exit mid-animation.
-* Nothing is animated when "Animation effects" is off in Windows settings,
-  in remote sessions, or for menus, tooltips, tool windows and the shell.
-* Genie needs a taskbar on the bottom or top edge. Left/right taskbars use the
-  Scale effect.
-* The genie aims at the taskbar centre (or below the window). Windows exposes no
-  public API for individual taskbar button positions.
-* Restoring a minimized window uses the normal Windows animation, because a
-  minimized window has no live picture to warp.
-* Open animation: the window is briefly cloaked while its first picture is
-  captured. If cloaking or the capture fails, the window just opens normally.
-  Turn it off if an app misbehaves.
-* Add games, anti-cheat software and misbehaving apps to "Excluded programs".
-
-Author: https://github.com/Charles-28X
-Dataset repo: https://github.com/Charles-28X/MacOS-Animation
+- Close: smooth shrink + fade.
+- Open: optional macOS-like pop-in with slight overshoot.
+- Minimize: Genie or Scale.
+- Genie now tries to aim at the exact taskbar button using UI Automation.
+- Hold Shift while minimizing for slow motion.
 */
 // ==/WindhawkModReadme==
 
@@ -87,163 +42,139 @@ Dataset repo: https://github.com/Charles-28X/MacOS-Animation
   $name: Close animation
 - closeDuration: 180
   $name: Close duration (ms)
-  $description: 60-1000. macOS is around 150-200.
 - closeScale: 95
   $name: Close shrink to (%)
-  $description: 50-100. 100 means fade only.
 - openEnabled: false
   $name: Open animation (experimental)
-  $description: Pop-in when a window is shown. Cloaks the window while capturing it, so turn it off if an app misbehaves.
 - openDuration: 220
   $name: Open duration (ms)
 - openScale: 92
   $name: Open starts at (%)
-  $description: 50-100.
 - minimizeStyle: genie
   $name: Minimize style
   $options:
   - genie: Genie (macOS)
   - scale: Scale
   - off: Off (Windows default)
-- minimizeDuration: 420
+- minimizeDuration: 450
   $name: Minimize duration (ms)
-  $description: 100-2000.
 - genieTarget: center
-  $name: Genie target
+  $name: Genie fallback target
   $options:
   - center: Taskbar centre
-  - window: Straight below the window
+  - window: Below window
+- shiftSlowMotion: true
+  $name: Hold Shift for slow motion
 - shadow: true
-  $name: Draw window shadow
+  $name: Draw shadow
+- shadowStrength: 45
+  $name: Shadow strength (%)
 - animateHide: true
-  $name: Also animate windows that are hidden instead of destroyed
-  $description: Needed for Chrome, Electron and tray apps that hide their window when you press X.
+  $name: Animate hidden windows
 - hookDefWindowProc: true
-  $name: Catch default close and minimize handling
-  $description: Also animates windows that Windows closes or minimizes internally (File Explorer, most native apps).
+  $name: Hook DefWindowProc
 - excludedPrograms: [vgc.exe, LeagueClient.exe, VALORANT.exe, EasyAntiCheat.exe, BEService.exe]
   $name: Excluded programs
-  $description: Executable names where the mod should not load (for example games with anti-cheat).
 */
 // ==/WindhawkModSettings==
 
+#include <windows.h>
 #include <dwmapi.h>
+#include <uiautomation.h>
+#include <objbase.h>
+#include <oleauto.h>
 
 #include <algorithm>
 #include <cmath>
-#include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <cwctype>
 #include <string>
 #include <vector>
 
 #ifndef PW_RENDERFULLCONTENT
-#define PW_RENDERFULLCONTENT 0x00000002
+#define PW_RENDERFULLCONTENT 2
 #endif
+
 #ifndef SPI_GETCLIENTAREAANIMATION
 #define SPI_GETCLIENTAREAANIMATION 0x1042
 #endif
 
-// ---- Late-bound imports: no -l linker flags required ----
-static decltype(&DwmGetWindowAttribute) g_pDwmGetWindowAttribute;
-static decltype(&DwmSetWindowAttribute) g_pDwmSetWindowAttribute;
-static decltype(&DwmFlush) g_pDwmFlush;
-static decltype(&CreateDIBSection) g_pCreateDIBSection;
-static decltype(&CreateCompatibleDC) g_pCreateCompatibleDC;
-static decltype(&SelectObject) g_pSelectObject;
-static decltype(&DeleteDC) g_pDeleteDC;
-static decltype(&DeleteObject) g_pDeleteObject;
+#ifndef PROCESS_QUERY_LIMITED_INFORMATION
+#define PROCESS_QUERY_LIMITED_INFORMATION 0x1000
+#endif
 
-#define DwmGetWindowAttribute g_pDwmGetWindowAttribute
-#define DwmSetWindowAttribute g_pDwmSetWindowAttribute
-#define DwmFlush g_pDwmFlush
-#define CreateDIBSection g_pCreateDIBSection
-#define CreateCompatibleDC g_pCreateCompatibleDC
-#define SelectObject g_pSelectObject
-#define DeleteDC g_pDeleteDC
-#define DeleteObject g_pDeleteObject
+#ifndef UIA_ButtonControlTypeId
+#define UIA_ButtonControlTypeId 50000
+#endif
 
-static bool LoadImports() {
-    HMODULE dwm = LoadLibraryW(L"dwmapi.dll");
-    HMODULE gdi = LoadLibraryW(L"gdi32.dll");
-    if (!dwm || !gdi) return false;
-#define WH_LOAD(var, mod, name) ((var = (decltype(var))GetProcAddress(mod, name)) != nullptr)
-    return WH_LOAD(g_pDwmGetWindowAttribute, dwm, "DwmGetWindowAttribute") &&
-           WH_LOAD(g_pDwmSetWindowAttribute, dwm, "DwmSetWindowAttribute") &&
-           WH_LOAD(g_pDwmFlush, dwm, "DwmFlush") &&
-           WH_LOAD(g_pCreateDIBSection, gdi, "CreateDIBSection") &&
-           WH_LOAD(g_pCreateCompatibleDC, gdi, "CreateCompatibleDC") &&
-           WH_LOAD(g_pSelectObject, gdi, "SelectObject") &&
-           WH_LOAD(g_pDeleteDC, gdi, "DeleteDC") &&
-           WH_LOAD(g_pDeleteObject, gdi, "DeleteObject");
-#undef WH_LOAD
-}
+#ifndef UIA_ListItemControlTypeId
+#define UIA_ListItemControlTypeId 50007
+#endif
+
+#ifndef UIA_ControlTypePropertyId
+#define UIA_ControlTypePropertyId 30003
+#endif
+
+#ifndef TreeScope_Descendants
+#define TreeScope_Descendants 4
+#endif
+
+static const GUID CLSID_CUIAutomation8_Guid =
+    {0xe22ad333, 0xb25f, 0x460c, {0x83, 0xd0, 0x05, 0x81, 0x10, 0x73, 0x95, 0xc9}};
+static const GUID CLSID_CUIAutomation_Guid =
+    {0xff48dba4, 0x60ef, 0x4201, {0xaa, 0x87, 0x54, 0x10, 0x3e, 0xef, 0x59, 0x4e}};
+static const GUID IID_IUIAutomation_Guid =
+    {0x30cbe57d, 0xd9d0, 0x452a, {0xab, 0x13, 0x7a, 0xc5, 0xac, 0x48, 0x25, 0xee}};
 
 namespace {
 
-// DWM attribute ids, defined locally because MinGW headers can lack them.
-constexpr DWORD kDwmTransitionsForceDisabled = 3;
-constexpr DWORD kDwmExtendedFrameBounds = 9;
-constexpr DWORD kDwmCloak = 13;
-constexpr DWORD kDwmCloaked = 14;
-constexpr DWORD kDwmCornerPreference = 33;  // Windows 11 only
-
-constexpr wchar_t kOverlayClass[] = L"WhMacAnimOverlay";
-
-enum class MinStyle { Off, Scale, Genie };
-
-struct {
-    bool closeOn = true;
-    int closeMs = 180;
-    double closeScale = 0.95;
-    bool openOn = false;
-    int openMs = 220;
-    double openScale = 0.92;
-    MinStyle minStyle = MinStyle::Genie;
-    int minMs = 420;
-    bool genieNearWindow = false;
-    bool shadow = true;
-    bool animateHide = true;
-    bool hookDefProc = true;
-    std::vector<std::wstring> excluded;
-} g_cfg;
-
-thread_local bool t_busy = false;  // re-entrancy guard (per thread)
-
-SRWLOCK g_classLock = SRWLOCK_INIT;
-bool g_classRegistered = false;
-
-using SetThreadDpiAwarenessContext_t = HANDLE(WINAPI*)(HANDLE);
-using GetDpiForWindow_t = UINT(WINAPI*)(HWND);
-SetThreadDpiAwarenessContext_t g_pSetThreadDpi = nullptr;
-GetDpiForWindow_t g_pGetDpiForWindow = nullptr;
-
-using DestroyWindow_t = decltype(&DestroyWindow);
-DestroyWindow_t DestroyWindow_Original;
-using ShowWindow_t = decltype(&ShowWindow);
-ShowWindow_t ShowWindow_Original;
-using DefProc_t = LRESULT(WINAPI*)(HWND, UINT, WPARAM, LPARAM);
-DefProc_t DefWindowProcW_Original;
-DefProc_t DefWindowProcA_Original;
-
-// ============================================================================
-//  Pure maths and software renderer (no Win32 calls)
-// ============================================================================
+constexpr int kMaxLevels = 10;
+constexpr float kLodBias = 0.55f;
+constexpr float kSlideEnd = 0.50f;
+constexpr float kTravelStart = 0.38f;
 
 inline float Sat(float x) { return x < 0.f ? 0.f : (x > 1.f ? 1.f : x); }
+
 inline float SmoothStep(float x) {
     x = Sat(x);
     return x * x * (3.f - 2.f * x);
 }
+
 inline double EaseOutCubic(double t) {
-    double u = 1.0 - t;
+    const double u = 1.0 - t;
     return 1.0 - u * u * u;
 }
+
 inline double EaseInOutSine(double t) {
     return -(std::cos(3.14159265358979323846 * t) - 1.0) / 2.0;
 }
 
-// Linear interpolation of two premultiplied ARGB pixels, f in 0..256.
+inline float EaseInOutCubic(float x) {
+    return x < 0.5f ? 4.f * x * x * x : 1.f - 4.f * (1.f - x) * (1.f - x) * (1.f - x);
+}
+
+inline double EaseOutQuint(double t) {
+    const double u = 1.0 - t;
+    return 1.0 - u * u * u * u * u;
+}
+
+inline double EaseOutBack(double t) {
+    const double c1 = 1.70158;
+    const double c3 = c1 + 1.0;
+    const double u = t - 1.0;
+    return 1.0 + c3 * u * u * u + c1 * u * u;
+}
+
+inline double EaseInQuad(double t) { return t * t; }
+
+inline float EaseTravel(float x) {
+    x = Sat(x);
+    return x * x * (2.2f - 1.2f * x);
+}
+
+inline float Log2f(float x) { return std::log(x) / std::log(2.0f); }
+
 inline uint32_t Lerp8(uint32_t a, uint32_t b, uint32_t f) {
     const uint32_t rb =
         (((a & 0x00FF00FFu) * (256u - f) + (b & 0x00FF00FFu) * f) >> 8) & 0x00FF00FFu;
@@ -253,165 +184,555 @@ inline uint32_t Lerp8(uint32_t a, uint32_t b, uint32_t f) {
     return rb | ag;
 }
 
-// Scales all four channels of a premultiplied pixel, a in 0..256.
 inline uint32_t Mul8(uint32_t c, uint32_t a) {
     const uint32_t rb = (((c & 0x00FF00FFu) * a) >> 8) & 0x00FF00FFu;
     const uint32_t ag = (((c >> 8) & 0x00FF00FFu) * a) & 0xFF00FF00u;
     return rb | ag;
 }
 
-// One output scanline: which source row to sample and where the span sits.
-struct RowMap {
-    float srcY = 0.f;  // continuous source row (pixel centres at .0)
-    float xl = 0.f;    // output span, pixel units
-    float xr = 0.f;
-    float cov = 0.f;   // vertical coverage 0..1 (0 = skip the row)
+inline uint32_t Avg4(uint32_t a, uint32_t b, uint32_t c, uint32_t d) {
+    const uint32_t rb = (((a & 0x00FF00FFu) + (b & 0x00FF00FFu) + (c & 0x00FF00FFu) +
+                          (d & 0x00FF00FFu) + 0x00020002u) >> 2) & 0x00FF00FFu;
+    const uint32_t ag = ((((a >> 8) & 0x00FF00FFu) + ((b >> 8) & 0x00FF00FFu) +
+                          ((c >> 8) & 0x00FF00FFu) + ((d >> 8) & 0x00FF00FFu) + 0x00020002u) >> 2) &
+                        0x00FF00FFu;
+    return rb | (ag << 8);
+}
+
+struct Pyramid {
+    int levels = 0;
+    int w[kMaxLevels] = {};
+    int h[kMaxLevels] = {};
+    const uint32_t* px[kMaxLevels] = {};
+    std::vector<uint32_t> store[kMaxLevels];
+
+    void Build(const uint32_t* base, int bw, int bh) {
+        levels = 1;
+        w[0] = bw;
+        h[0] = bh;
+        px[0] = base;
+
+        while (levels < kMaxLevels && w[levels - 1] >= 8 && h[levels - 1] >= 8) {
+            const int pw = w[levels - 1], ph = h[levels - 1];
+            const int nw = (pw + 1) / 2, nh = (ph + 1) / 2;
+            std::vector<uint32_t>& d = store[levels];
+            d.assign((size_t)nw * nh, 0u);
+            const uint32_t* s = px[levels - 1];
+
+            for (int y = 0; y < nh; y++) {
+                const uint32_t* r0 = s + (size_t)(2 * y) * pw;
+                const uint32_t* r1 = s + (size_t)std::min(2 * y + 1, ph - 1) * pw;
+                uint32_t* o = &d[(size_t)y * nw];
+
+                for (int x = 0; x < nw; x++) {
+                    const int x0 = 2 * x;
+                    const int x1 = std::min(2 * x + 1, pw - 1);
+                    o[x] = Avg4(r0[x0], r0[x1], r1[x0], r1[x1]);
+                }
+            }
+
+            w[levels] = nw;
+            h[levels] = nh;
+            px[levels] = d.data();
+            levels++;
+        }
+    }
 };
 
-// Draws one scanline: bilinear horizontal stretch of source row `m.srcY`
-// into [xl, xr), with anti-aliased left and right edges.
-void RenderRow(uint32_t* dst, int bw, const uint32_t* src, int aw, int ah, const RowMap& m) {
-    if (m.cov <= 0.f || m.xr - m.xl < 0.25f) return;
-    const float sy = std::clamp(m.srcY, 0.f, (float)(ah - 1));
-    const int iy = (int)sy;
-    const int iy1 = std::min(iy + 1, ah - 1);
-    const uint32_t fy = (uint32_t)((sy - (float)iy) * 256.f);
-    const uint32_t* r0 = src + (size_t)iy * aw;
-    const uint32_t* r1 = src + (size_t)iy1 * aw;
+struct RowMap {
+    float srcY = 0.f;
+    float xl = 0.f;
+    float xr = 0.f;
+    float cov = 0.f;
+};
 
-    const float step = (float)aw / (m.xr - m.xl);
-    const int xs = std::max(0, (int)std::floor(m.xl));
-    const int xe = std::min(bw - 1, (int)std::floor(m.xr - 0.001f));
-    if (xe < xs) return;
-    const float maxU = (float)(aw - 1);
-    float u = ((float)xs + 0.5f - m.xl) * step - 0.5f;
+struct Scratch {
+    std::vector<uint32_t> vbuf[2];
+    std::vector<uint32_t> out2;
+    std::vector<uint32_t> prefix;
 
-    for (int x = xs; x <= xe; x++, u += step) {
-        const float uc = u < 0.f ? 0.f : (u > maxU ? maxU : u);
-        const int ix = (int)uc;
-        const int ix1 = std::min(ix + 1, aw - 1);
-        const uint32_t fx = (uint32_t)((uc - (float)ix) * 256.f);
-        uint32_t px = Lerp8(Lerp8(r0[ix], r0[ix1], fx), Lerp8(r1[ix], r1[ix1], fx), fy);
+    void Init(int srcW, int outW) {
+        vbuf[0].assign((size_t)srcW + 2, 0u);
+        vbuf[1].assign((size_t)srcW + 2, 0u);
+        prefix.assign(((size_t)srcW + 2) * 4, 0u);
+        out2.assign((size_t)outW + 2, 0u);
+    }
+};
 
-        float c = m.cov;
-        if (x == xs || x == xe) {
-            const float l = std::max((float)x, m.xl);
-            const float r = std::min((float)x + 1.f, m.xr);
-            c *= Sat(r - l);
-        }
-        if (c < 0.996f) px = Mul8(px, (uint32_t)(c * 256.f));
-        dst[x] = px;
+inline const uint32_t* VerticalLine(const Pyramid& py, int lv, float srcY0,
+                                    std::vector<uint32_t>& buf) {
+    const int w = py.w[lv], h = py.h[lv];
+    float v = (srcY0 + 0.5f) / (float)(1 << lv) - 0.5f;
+    v = v < 0.f ? 0.f : (v > (float)(h - 1) ? (float)(h - 1) : v);
+
+    const int y0 = (int)v;
+    const int y1 = std::min(y0 + 1, h - 1);
+    const uint32_t f = (uint32_t)((v - (float)y0) * 256.f);
+    const uint32_t* r0 = py.px[lv] + (size_t)y0 * w;
+
+    if (f == 0 || y1 == y0) return r0;
+
+    const uint32_t* r1 = py.px[lv] + (size_t)y1 * w;
+    for (int x = 0; x < w; x++) buf[x] = Lerp8(r0[x], r1[x], f);
+    return buf.data();
+}
+
+inline void PrefixAt(const uint32_t* P, int w, float t, float* o) {
+    const int i = (int)t;
+    if (i >= w) {
+        for (int c = 0; c < 4; c++) o[c] = (float)P[(size_t)w * 4 + c];
+        return;
+    }
+
+    const float fr = t - (float)i;
+    for (int c = 0; c < 4; c++) {
+        const float a = (float)P[(size_t)i * 4 + c];
+        const float b = (float)P[(size_t)(i + 1) * 4 + c];
+        o[c] = a + (b - a) * fr;
     }
 }
 
-// Uniform scale `s` of the whole picture around the centre (cx, cy).
-void BuildAffine(std::vector<RowMap>& rows, int bh, float cx, float cy, float aw, float ah,
-                 float s) {
+void HorizontalSpan(const uint32_t* line, int w, float xl, float xr, int xs, int xe,
+                    uint32_t* out, std::vector<uint32_t>& prefix) {
+    const float step = (float)w / (xr - xl);
+
+    if (step <= 1.25f) {
+        const float maxU = (float)(w - 1);
+        float u = ((float)xs + 0.5f - xl) * step - 0.5f;
+
+        for (int x = xs; x <= xe; x++, u += step) {
+            const float uc = u < 0.f ? 0.f : (u > maxU ? maxU : u);
+            const int ix = (int)uc;
+            const int ix1 = std::min(ix + 1, w - 1);
+            const uint32_t fx = (uint32_t)((uc - (float)ix) * 256.f);
+            out[x - xs] = Lerp8(line[ix], line[ix1], fx);
+        }
+        return;
+    }
+
+    uint32_t* P = prefix.data();
+    P[0] = P[1] = P[2] = P[3] = 0;
+
+    for (int i = 0; i < w; i++) {
+        const uint32_t c = line[i];
+        uint32_t* d = P + (size_t)(i + 1) * 4;
+        const uint32_t* s = P + (size_t)i * 4;
+        d[0] = s[0] + (c >> 24);
+        d[1] = s[1] + ((c >> 16) & 0xFF);
+        d[2] = s[2] + ((c >> 8) & 0xFF);
+        d[3] = s[3] + (c & 0xFF);
+    }
+
+    const float fw = (float)w;
+    float a = ((float)xs - xl) * step;
+
+    for (int x = xs; x <= xe; x++, a += step) {
+        float lo = a < 0.f ? 0.f : (a > fw ? fw : a);
+        float hi = a + step;
+        hi = hi < 0.f ? 0.f : (hi > fw ? fw : hi);
+
+        if (hi - lo < 1e-3f) {
+            hi = std::min(fw, lo + 1e-3f);
+            lo = hi - 1e-3f;
+        }
+
+        float s0[4], s1[4];
+        PrefixAt(P, w, lo, s0);
+        PrefixAt(P, w, hi, s1);
+
+        const float k = 1.f / (hi - lo);
+        uint32_t v[4];
+
+        for (int c = 0; c < 4; c++) {
+            const float f = (s1[c] - s0[c]) * k + 0.5f;
+            v[c] = (uint32_t)(f < 0.f ? 0.f : (f > 255.f ? 255.f : f));
+        }
+
+        v[1] = std::min(v[1], v[0]);
+        v[2] = std::min(v[2], v[0]);
+        v[3] = std::min(v[3], v[0]);
+        out[x - xs] = (v[0] << 24) | (v[1] << 16) | (v[2] << 8) | v[3];
+    }
+}
+
+bool RenderRowSpan(uint32_t* dstRow, int bw, const Pyramid& py, const RowMap& m, int lvA,
+                   int lvB, uint32_t lf, Scratch& sc, int* oxs, int* oxe) {
+    if (m.cov <= 0.f || m.xr - m.xl < 0.25f) return false;
+
+    const int xs = std::max(0, (int)std::floor(m.xl));
+    const int xe = std::min(bw - 1, (int)std::floor(m.xr - 0.001f));
+    if (xe < xs) return false;
+
+    const int n = xe - xs + 1;
+    const uint32_t* la = VerticalLine(py, lvA, m.srcY, sc.vbuf[0]);
+    HorizontalSpan(la, py.w[lvA], m.xl, m.xr, xs, xe, dstRow + xs, sc.prefix);
+
+    if (lvB != lvA && lf > 0) {
+        const uint32_t* lb = VerticalLine(py, lvB, m.srcY, sc.vbuf[1]);
+        HorizontalSpan(lb, py.w[lvB], m.xl, m.xr, xs, xe, sc.out2.data(), sc.prefix);
+        for (int i = 0; i < n; i++) dstRow[xs + i] = Lerp8(dstRow[xs + i], sc.out2[i], lf);
+    }
+
+    if (m.cov < 0.996f) {
+        const uint32_t a = (uint32_t)(m.cov * 256.f);
+        for (int i = 0; i < n; i++) dstRow[xs + i] = Mul8(dstRow[xs + i], a);
+    }
+
+    const float cl = Sat(std::min((float)xs + 1.f, m.xr) - std::max((float)xs, m.xl));
+    if (cl < 0.996f) dstRow[xs] = Mul8(dstRow[xs], (uint32_t)(cl * 256.f));
+
+    if (xe != xs) {
+        const float cr = Sat(std::min((float)xe + 1.f, m.xr) - std::max((float)xe, m.xl));
+        if (cr < 0.996f) dstRow[xe] = Mul8(dstRow[xe], (uint32_t)(cr * 256.f));
+    }
+
+    *oxs = xs;
+    *oxe = xe;
+    return true;
+}
+
+struct RowSpan {
+    int curL = 0, curR = -1;
+    int dirL = 0, dirR = -1;
+};
+
+struct FrameCtx {
+    const Pyramid* py = nullptr;
+    const RowMap* rows = nullptr;
+    RowSpan* spans = nullptr;
+    uint32_t* frame = nullptr;
+    int bw = 0, bh = 0;
+    int lvA = 0, lvB = 0;
+    uint32_t lf = 0;
+};
+
+void RenderRows(const FrameCtx& c, int y0, int y1, Scratch& sc) {
+    for (int y = y0; y < y1; y++) {
+        RowSpan& sp = c.spans[y];
+        uint32_t* row = c.frame + (size_t)y * c.bw;
+
+        const int oldL = sp.curL, oldR = sp.curR;
+        if (oldR >= oldL) memset(row + oldL, 0, (size_t)(oldR - oldL + 1) * 4);
+
+        int xs = 0, xe = -1;
+        if (RenderRowSpan(row, c.bw, *c.py, c.rows[y], c.lvA, c.lvB, c.lf, sc, &xs, &xe)) {
+            sp.curL = xs;
+            sp.curR = xe;
+        } else {
+            sp.curL = 0;
+            sp.curR = -1;
+        }
+
+        int dl = 0, dr = -1;
+        if (oldR >= oldL && sp.curR >= sp.curL) {
+            dl = std::min(oldL, sp.curL);
+            dr = std::max(oldR, sp.curR);
+        } else if (oldR >= oldL) {
+            dl = oldL;
+            dr = oldR;
+        } else if (sp.curR >= sp.curL) {
+            dl = sp.curL;
+            dr = sp.curR;
+        }
+
+        sp.dirL = dl;
+        sp.dirR = dr;
+    }
+}
+
+inline void PickLevels(const Pyramid& py, float minification, int* lvA, int* lvB, uint32_t* lf) {
+    float lod = minification > 1.f ? Log2f(minification) - kLodBias : 0.f;
+    const float maxL = (float)(py.levels - 1);
+    lod = lod < 0.f ? 0.f : (lod > maxL ? maxL : lod);
+
+    const int a = (int)lod;
+    const float fr = lod - (float)a;
+
+    *lvA = a;
+    if (a < py.levels - 1 && fr > 0.02f) {
+        *lvB = a + 1;
+        *lf = (uint32_t)(fr * 256.f);
+    } else {
+        *lvB = a;
+        *lf = 0;
+    }
+}
+
+float BuildAffine(std::vector<RowMap>& rows, int bh, float cx, float cy, float aw, float ah,
+                  float s) {
+    for (auto& r : rows) r.cov = 0.f;
+
     const float w = aw * s, h = ah * s;
     const float left = cx - w * 0.5f, top = cy - h * 0.5f;
+
     for (int y = 0; y < bh; y++) {
         const float t0 = std::max((float)y, top);
         const float t1 = std::min((float)y + 1.f, top + h);
-        if (t1 <= t0) {
-            rows[y].cov = 0.f;
-            continue;
-        }
+        if (t1 <= t0) continue;
+
         const float yc = (t0 + t1) * 0.5f;
         rows[y] = RowMap{(yc - top) / s - 0.5f, left, left + w, std::min(1.f, t1 - t0)};
     }
+
+    return 1.f / s;
 }
 
-// Genie geometry in a "canonical" frame where the dock lies BELOW the window
-// (y grows toward the dock). For a dock above the window the frame is flipped.
 struct GenieGeom {
-    float ax = 0, ay = 0, aw = 0, ah = 0;  // picture rectangle
-    float dx = 0, dy = 0;                  // dock point (dy >= ay + ah)
-    float hwMin = 0;                       // half width of the funnel at the dock
+    float ax = 0, ay = 0, aw = 0, ah = 0;
+    float dxL = 0, dxR = 0;
+    float dockTop = 0, dockBot = 0;
     bool flip = false;
 };
 
-// The mesh-warp model:
-//  * Source row t (0 = far from the dock, 1 = nearest) has its own progress
-//    q(t, p) = clamp((p - k (1 - t)) / (1 - k)). Rows nearest the dock leave
-//    first, the far edge leaves last.
-//  * A row slides toward the dock and narrows to the dock width with a
-//    smoothstep, which gives the S-shaped sides of the genie funnel.
-// p is the (already eased) animation progress in 0..1.
-void BuildGenie(std::vector<RowMap>& rows, std::vector<float>& yb, int bh, const GenieGeom& g,
-                float p) {
+inline float GenieCurve(float s) { return EaseInOutCubic(s); }
+
+float BuildGenie(std::vector<RowMap>& rows, int bh, const GenieGeom& g, float p) {
     for (auto& r : rows) r.cov = 0.f;
-    const int n = (int)g.ah;
-    if (n < 2) return;
-    constexpr float k = 0.5f;
-    const float cx0 = g.ax + g.aw * 0.5f;
-    const float hw0 = g.aw * 0.5f;
-    auto qOf = [&](float t) { return Sat((p - k * (1.f - t)) / (1.f - k)); };
 
-    yb.resize((size_t)n + 1);
-    for (int i = 0; i <= n; i++) {
-        const float t = (float)i / (float)n;
-        const float ys = g.ay + t * g.ah;
-        float v = ys + (g.dy - ys) * SmoothStep(qOf(t));
-        if (i > 0 && v < yb[i - 1]) v = yb[i - 1];  // keep it monotonic
-        yb[i] = v;
+    const float sp = (float)EaseInOutSine(Sat(p / kSlideEnd));
+    const float tp = EaseTravel((p - kTravelStart) / (1.f - kTravelStart));
+
+    const float top0 = g.ay, bot0 = g.ay + g.ah;
+    const float travel = std::max(1.f, g.dockTop - top0);
+    const float yt = top0 + tp * travel;
+    const float yb = std::min(bot0 + tp * travel, std::max(g.dockBot, bot0));
+
+    if (yb - yt < 0.5f) return 1.f;
+
+    const float L0 = g.ax, R0 = g.ax + g.aw;
+    const float Lb = L0 + sp * (g.dxL - L0);
+    const float Rb = R0 + sp * (g.dxR - R0);
+
+    auto edgeX = [&](float y, float topX, float botX) {
+        if (y <= top0) return topX;
+        if (y >= g.dockTop) return botX;
+        return botX + GenieCurve((g.dockTop - y) / travel) * (topX - botX);
+    };
+
+    const float rowsPerPx = g.ah / (yb - yt);
+    const int y0 = std::max(0, (int)std::floor(yt));
+    const int y1 = std::min(bh - 1, (int)std::ceil(yb));
+
+    for (int y = y0; y <= y1; y++) {
+        const float c0 = std::max((float)y, yt);
+        const float c1 = std::min((float)y + 1.f, yb);
+        if (c1 <= c0) continue;
+
+        const float yc = 0.5f * (c0 + c1);
+        const float s = (yc - yt) * rowsPerPx;
+
+        RowMap m;
+        m.srcY = (g.flip ? g.ah - s : s) - 0.5f;
+        m.xl = edgeX(yc, L0, Lb);
+        m.xr = edgeX(yc, R0, Rb);
+        m.cov = Sat(c1 - c0);
+        rows[g.flip ? bh - 1 - y : y] = m;
     }
 
-    int idx = 0;
-    for (int y = 0; y < bh; y++) {
-        const float yc = (float)y + 0.5f;
-        if (yc < yb[0] || yc >= yb[n]) continue;
-        while (idx < n - 1 && yb[idx + 1] <= yc) idx++;
-        const float span = yb[idx + 1] - yb[idx];
-        const float frac = span > 1e-4f ? (yc - yb[idx]) / span : 0.5f;
-        const float s = (float)idx + frac;  // continuous source row
-        const float e = SmoothStep(qOf(s / (float)n));
-        const float xc = cx0 + (g.dx - cx0) * e;
-        const float hw = hw0 + (g.hwMin - hw0) * e;
-        RowMap m{s - 0.5f, xc - hw, xc + hw, 1.f};
-        int oy = y;
-        if (g.flip) {
-            oy = bh - 1 - y;
-            m.srcY = (float)(n - 1) - m.srcY;
-        }
-        rows[oy] = m;
-    }
+    return rowsPerPx;
 }
 
-// Two-pass box blur of a single-channel image (used for the soft shadow).
-void BoxBlur(std::vector<uint8_t>& a, int w, int h, int r) {
+void BoxBlurF(std::vector<float>& a, int w, int h, int r) {
     if (r < 1) return;
-    std::vector<uint8_t> tmp(a.size());
-    const int d = 2 * r + 1;
+
+    std::vector<float> tmp(a.size());
+    const float inv = 1.f / (float)(2 * r + 1);
 
     for (int y = 0; y < h; y++) {
-        const uint8_t* src = &a[(size_t)y * w];
-        uint8_t* dst = &tmp[(size_t)y * w];
-        int sum = 0;
-        for (int x = -r; x <= r; x++) sum += (x >= 0 && x < w) ? src[x] : 0;
+        const float* s = &a[(size_t)y * w];
+        float* d = &tmp[(size_t)y * w];
+        float sum = 0.f;
+
+        for (int x = -r; x <= r; x++) sum += (x >= 0 && x < w) ? s[x] : 0.f;
+
         for (int x = 0; x < w; x++) {
-            dst[x] = (uint8_t)(sum / d);
-            int add = x + r + 1, sub = x - r;
-            if (add < w) sum += src[add];
-            if (sub >= 0) sum -= src[sub];
+            d[x] = sum * inv;
+            const int add = x + r + 1, sub = x - r;
+            if (add < w) sum += s[add];
+            if (sub >= 0) sum -= s[sub];
         }
     }
+
     for (int x = 0; x < w; x++) {
-        int sum = 0;
-        for (int y = -r; y <= r; y++) sum += (y >= 0 && y < h) ? tmp[(size_t)y * w + x] : 0;
+        float sum = 0.f;
+        for (int y = -r; y <= r; y++) sum += (y >= 0 && y < h) ? tmp[(size_t)y * w + x] : 0.f;
+
         for (int y = 0; y < h; y++) {
-            a[(size_t)y * w + x] = (uint8_t)(sum / d);
-            int add = y + r + 1, sub = y - r;
+            a[(size_t)y * w + x] = sum * inv;
+            const int add = y + r + 1, sub = y - r;
             if (add < h) sum += tmp[(size_t)add * w + x];
             if (sub >= 0) sum -= tmp[(size_t)sub * w + x];
         }
     }
 }
 
-// ============================================================================
-//  Win32 helpers
-// ============================================================================
+void BuildShadow(uint32_t* art, int ow, int oh, int pad, int offY, int fw, int fh, int inset,
+                 float maxAlpha) {
+    constexpr int Q = 4;
+    const int lw = (ow + Q - 1) / Q + 2;
+    const int lh = (oh + Q - 1) / Q + 2;
 
-// A 32-bit top-down DIB section with its own memory DC.
+    std::vector<float> m((size_t)lw * lh, 0.f);
+    std::vector<float> cx(lw), cy(lh);
+
+    auto overlap = [](float a0, float a1, float b0, float b1) {
+        return std::max(0.f, std::min(a1, b1) - std::max(a0, b0));
+    };
+
+    for (int i = 0; i < lw; i++)
+        cx[i] = overlap((float)(i * Q), (float)(i * Q + Q), (float)pad, (float)(pad + fw)) / Q;
+
+    for (int j = 0; j < lh; j++)
+        cy[j] = overlap((float)(j * Q), (float)(j * Q + Q), (float)(pad + offY),
+                        (float)(pad + offY + fh)) / Q;
+
+    for (int j = 0; j < lh; j++)
+        for (int i = 0; i < lw; i++) m[(size_t)j * lw + i] = cx[i] * cy[j];
+
+    const int r = std::max(1, pad / (Q * 3));
+    for (int pass = 0; pass < 3; pass++) BoxBlurF(m, lw, lh, r);
+
+    std::vector<int> ix0(ow);
+    std::vector<float> fxv(ow);
+
+    for (int x = 0; x < ow; x++) {
+        float u = ((float)x + 0.5f) / Q - 0.5f;
+        u = u < 0.f ? 0.f : (u > (float)(lw - 2) ? (float)(lw - 2) : u);
+        ix0[x] = (int)u;
+        fxv[x] = u - (float)ix0[x];
+    }
+
+    const int ix = pad + inset, iy = pad + inset;
+    const int iw = fw - 2 * inset, ih = fh - 2 * inset;
+
+    for (int y = 0; y < oh; y++) {
+        float v = ((float)y + 0.5f) / Q - 0.5f;
+        v = v < 0.f ? 0.f : (v > (float)(lh - 2) ? (float)(lh - 2) : v);
+
+        const int j0 = (int)v;
+        const float fy = v - (float)j0;
+        const float* r0 = &m[(size_t)j0 * lw];
+        const float* r1 = r0 + lw;
+        const bool midRow = y >= iy && y < iy + ih;
+        uint32_t* d = art + (size_t)y * ow;
+
+        for (int x = 0; x < ow; x++) {
+            if (midRow && x >= ix && x < ix + iw) {
+                x = ix + iw - 1;
+                continue;
+            }
+
+            const int i0 = ix0[x];
+            const float fx = fxv[x];
+            const float a = (r0[i0] * (1.f - fx) + r0[i0 + 1] * fx) * (1.f - fy) +
+                            (r1[i0] * (1.f - fx) + r1[i0 + 1] * fx) * fy;
+
+            const float al = a * maxAlpha * 255.f + 0.5f;
+            d[x] = (uint32_t)(al > 255.f ? 255.f : al) << 24;
+        }
+    }
+}
+
+struct Api {
+    decltype(&::DwmGetWindowAttribute) DwmGetWindowAttribute = nullptr;
+    decltype(&::DwmSetWindowAttribute) DwmSetWindowAttribute = nullptr;
+    decltype(&::DwmFlush) DwmFlush = nullptr;
+    decltype(&::DwmGetCompositionTimingInfo) DwmGetCompositionTimingInfo = nullptr;
+    decltype(&::CreateDIBSection) CreateDIBSection = nullptr;
+    decltype(&::CreateCompatibleDC) CreateCompatibleDC = nullptr;
+    decltype(&::SelectObject) SelectObject = nullptr;
+    decltype(&::DeleteDC) DeleteDC = nullptr;
+    decltype(&::DeleteObject) DeleteObject = nullptr;
+
+    HANDLE(WINAPI* AvSetMmThreadCharacteristicsW)(LPCWSTR, LPDWORD) = nullptr;
+    BOOL(WINAPI* AvRevertMmThreadCharacteristics)(HANDLE) = nullptr;
+
+    HANDLE(WINAPI* SetThreadDpiAwarenessContext)(HANDLE) = nullptr;
+    UINT(WINAPI* GetDpiForWindow)(HWND) = nullptr;
+} g_api;
+
+bool LoadImports() {
+    HMODULE dwm = LoadLibraryW(L"dwmapi.dll");
+    HMODULE gdi = LoadLibraryW(L"gdi32.dll");
+    if (!dwm || !gdi) return false;
+
+#define WH_LOAD(field, mod, name) \
+    ((g_api.field = (decltype(g_api.field))GetProcAddress(mod, name)) != nullptr)
+
+    const bool ok = WH_LOAD(DwmGetWindowAttribute, dwm, "DwmGetWindowAttribute") &&
+                    WH_LOAD(DwmSetWindowAttribute, dwm, "DwmSetWindowAttribute") &&
+                    WH_LOAD(DwmFlush, dwm, "DwmFlush") &&
+                    WH_LOAD(CreateDIBSection, gdi, "CreateDIBSection") &&
+                    WH_LOAD(CreateCompatibleDC, gdi, "CreateCompatibleDC") &&
+                    WH_LOAD(SelectObject, gdi, "SelectObject") &&
+                    WH_LOAD(DeleteDC, gdi, "DeleteDC") &&
+                    WH_LOAD(DeleteObject, gdi, "DeleteObject");
+
+    if (!ok) return false;
+
+    (void)WH_LOAD(DwmGetCompositionTimingInfo, dwm, "DwmGetCompositionTimingInfo");
+
+    if (HMODULE av = LoadLibraryW(L"avrt.dll")) {
+        (void)WH_LOAD(AvSetMmThreadCharacteristicsW, av, "AvSetMmThreadCharacteristicsW");
+        (void)WH_LOAD(AvRevertMmThreadCharacteristics, av, "AvRevertMmThreadCharacteristics");
+    }
+
+    if (HMODULE u = GetModuleHandleW(L"user32.dll")) {
+        (void)WH_LOAD(SetThreadDpiAwarenessContext, u, "SetThreadDpiAwarenessContext");
+        (void)WH_LOAD(GetDpiForWindow, u, "GetDpiForWindow");
+    }
+
+#undef WH_LOAD
+    return true;
+}
+
+constexpr DWORD kDwmTransitionsForceDisabled = 3;
+constexpr DWORD kDwmExtendedFrameBounds = 9;
+constexpr DWORD kDwmCloak = 13;
+constexpr DWORD kDwmCloaked = 14;
+constexpr DWORD kDwmCornerPreference = 33;
+
+constexpr wchar_t kOverlayClass[] = L"WhMacAnimOverlay";
+
+enum class MinStyle { Off, Scale, Genie };
+
+struct {
+    bool closeOn = true;
+    int closeMs = 180;
+    double closeScale = 0.95;
+
+    bool openOn = false;
+    int openMs = 220;
+    double openScale = 0.92;
+
+    MinStyle minStyle = MinStyle::Genie;
+    int minMs = 450;
+    bool genieNearWindow = false;
+    bool shiftSlow = true;
+
+    bool shadow = true;
+    float shadowAlpha = 0.45f;
+    bool animateHide = true;
+    bool hookDefProc = true;
+
+    std::vector<std::wstring> excluded;
+} g_cfg;
+
+thread_local bool t_busy = false;
+
+SRWLOCK g_classLock = SRWLOCK_INIT;
+bool g_classRegistered = false;
+
+using DestroyWindow_t = decltype(&DestroyWindow);
+DestroyWindow_t DestroyWindow_Original;
+
+using ShowWindow_t = decltype(&ShowWindow);
+ShowWindow_t ShowWindow_Original;
+
+using DefProc_t = LRESULT(WINAPI*)(HWND, UINT, WPARAM, LPARAM);
+DefProc_t DefWindowProcW_Original;
+DefProc_t DefWindowProcA_Original;
+
 struct Surface {
     HDC dc = nullptr;
     HBITMAP bmp = nullptr;
@@ -430,20 +751,25 @@ struct Surface {
         bi.bmiHeader.biPlanes = 1;
         bi.bmiHeader.biBitCount = 32;
         bi.bmiHeader.biCompression = BI_RGB;
-        bmp = CreateDIBSection(ref, &bi, DIB_RGB_COLORS, &bits, nullptr, 0);
+
+        bmp = g_api.CreateDIBSection(ref, &bi, DIB_RGB_COLORS, &bits, nullptr, 0);
         if (!bmp) return false;
-        dc = CreateCompatibleDC(ref);
+
+        dc = g_api.CreateCompatibleDC(ref);
         if (!dc) return false;
-        old = SelectObject(dc, bmp);
+
+        old = g_api.SelectObject(dc, bmp);
         return true;
     }
 
     void Free() {
         if (dc) {
-            if (old) SelectObject(dc, old);
-            DeleteDC(dc);
+            if (old) g_api.SelectObject(dc, old);
+            g_api.DeleteDC(dc);
         }
-        if (bmp) DeleteObject(bmp);
+
+        if (bmp) g_api.DeleteObject(bmp);
+
         dc = nullptr;
         bmp = nullptr;
         old = nullptr;
@@ -453,45 +779,53 @@ struct Surface {
     ~Surface() { Free(); }
 };
 
+void LowerString(std::wstring& s) {
+    for (wchar_t& c : s) c = (wchar_t)std::towlower(c);
+}
+
 bool EnsureOverlayClass() {
     bool ok = true;
     AcquireSRWLockExclusive(&g_classLock);
+
     if (!g_classRegistered) {
         WNDCLASSW wc = {};
-        wc.lpfnWndProc = DefWindowProcW;  // user32 stays loaded, so this is safe
+        wc.lpfnWndProc = DefWindowProcW;
         wc.hInstance = GetModuleHandleW(nullptr);
         wc.lpszClassName = kOverlayClass;
+
         ok = RegisterClassW(&wc) != 0 || GetLastError() == ERROR_CLASS_ALREADY_EXISTS;
         g_classRegistered = ok;
     }
+
     ReleaseSRWLockExclusive(&g_classLock);
     return ok;
 }
 
 bool IsCloaked(HWND hwnd) {
     DWORD cloaked = 0;
-    return SUCCEEDED(DwmGetWindowAttribute(hwnd, kDwmCloaked, &cloaked, sizeof(cloaked))) &&
+    return SUCCEEDED(g_api.DwmGetWindowAttribute(hwnd, kDwmCloaked, &cloaked, sizeof(cloaked))) &&
            cloaked;
 }
 
-// Checks that do not depend on whether the window is shown right now.
 bool BaseEligible(HWND hwnd) {
     if (t_busy || !hwnd || !IsWindow(hwnd)) return false;
     if (GetWindowThreadProcessId(hwnd, nullptr) != GetCurrentThreadId()) return false;
 
     const LONG_PTR style = GetWindowLongPtrW(hwnd, GWL_STYLE);
     const LONG_PTR ex = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+
     if (style & WS_CHILD) return false;
     if (ex & (WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE)) return false;
     if (((style & WS_CAPTION) != WS_CAPTION) && !(style & WS_THICKFRAME)) return false;
     if (GetAncestor(hwnd, GA_PARENT) != GetDesktopWindow()) return false;
 
-    BOOL anim = TRUE;  // respect the Windows "Animation effects" switch
+    BOOL anim = TRUE;
     SystemParametersInfoW(SPI_GETCLIENTAREAANIMATION, 0, &anim, 0);
     if (!anim || GetSystemMetrics(SM_REMOTESESSION)) return false;
 
     WCHAR cls[64] = {};
     GetClassNameW(hwnd, cls, 64);
+
     static const wchar_t* const kSkip[] = {
         L"#32768", L"tooltips_class32", L"Shell_TrayWnd", L"Shell_SecondaryTrayWnd",
         L"Progman", L"WorkerW", L"NotifyIconOverflowWindow", L"ForegroundStaging",
@@ -499,17 +833,17 @@ bool BaseEligible(HWND hwnd) {
         L"TopLevelWindowForOverflowXamlIsland", L"Xaml_WindowedPopupClass",
         L"MultitaskingViewFrame", L"TaskListThumbnailWnd", L"TaskListOverlayWnd",
         kOverlayClass};
+
     for (const wchar_t* s : kSkip)
         if (wcscmp(cls, s) == 0) return false;
+
     return true;
 }
 
-// A window that is on screen and can be captured now (close / hide / minimize).
 bool ShouldAnimateVisible(HWND hwnd) {
     return BaseEligible(hwnd) && IsWindowVisible(hwnd) && !IsIconic(hwnd) && !IsCloaked(hwnd);
 }
 
-// A hidden window that is about to be shown (open).
 bool ShouldAnimateOpen(HWND hwnd) {
     return BaseEligible(hwnd) && !IsWindowVisible(hwnd) && !IsIconic(hwnd) && !IsCloaked(hwnd);
 }
@@ -518,44 +852,241 @@ bool CanMinimize(HWND hwnd) {
     return (GetWindowLongPtrW(hwnd, GWL_STYLE) & WS_MINIMIZEBOX) != 0;
 }
 
-// Rough "is this capture empty?" test, used before the open animation.
-bool LooksBlank(const uint32_t* px, int w, int h) {
+bool CaptureFailed(const uint32_t* px, int stride, int w, int h) {
     if (!px || w < 8 || h < 8) return true;
-    const uint32_t first = px[0] & 0x00FCFCFCu;
-    for (int sy = 1; sy < 16; sy++) {
-        for (int sx = 1; sx < 16; sx++) {
-            const uint32_t v = px[(size_t)(h * sy / 16) * w + (w * sx / 16)] & 0x00FCFCFCu;
-            if (v != first) return false;
-        }
-    }
+
+    for (int sy = 1; sy < 12; sy++)
+        for (int sx = 1; sx < 12; sx++)
+            if ((px[(size_t)(h * sy / 12) * stride + (w * sx / 12)] & 0x00FFFFFFu) != 0)
+                return false;
+
     return true;
 }
 
-// ---- Dock (taskbar) target -------------------------------------------------
+bool LooksBlank(const uint32_t* px, int stride, int w, int h) {
+    if (CaptureFailed(px, stride, w, h)) return true;
+
+    const uint32_t first = px[0] & 0x00FCFCFCu;
+    for (int sy = 1; sy < 16; sy++)
+        for (int sx = 1; sx < 16; sx++)
+            if ((px[(size_t)(h * sy / 16) * stride + (w * sx / 16)] & 0x00FCFCFCu) != first)
+                return false;
+
+    return true;
+}
+
+bool IsFrontmostIn(HWND hwnd, const RECT& r) {
+    for (HWND w = GetWindow(hwnd, GW_HWNDPREV); w; w = GetWindow(w, GW_HWNDPREV)) {
+        if (!IsWindowVisible(w) || IsIconic(w)) continue;
+        if (GetWindowLongPtrW(w, GWL_EXSTYLE) & (WS_EX_TOPMOST | WS_EX_TRANSPARENT)) continue;
+        if (IsCloaked(w)) continue;
+
+        RECT wr, ir;
+        if (GetWindowRect(w, &wr) && IntersectRect(&ir, &wr, &r)) return false;
+    }
+
+    return true;
+}
 
 enum class Edge { Bottom, Top, Left, Right };
 
 struct Dock {
     POINT pt = {};
     Edge edge = Edge::Bottom;
-    int half = 22;  // half the width of a taskbar button
+    int half = 22;
 };
 
-bool FindTaskbarRect(HMONITOR mon, RECT* out) {
-    RECT r;
+HWND FindTaskbarHwndForMonitor(HMONITOR mon) {
     HWND h = FindWindowW(L"Shell_TrayWnd", nullptr);
-    if (h && GetWindowRect(h, &r) && MonitorFromRect(&r, MONITOR_DEFAULTTONEAREST) == mon) {
-        *out = r;
-        return true;
+    if (h) {
+        RECT r;
+        if (GetWindowRect(h, &r) && MonitorFromRect(&r, MONITOR_DEFAULTTONEAREST) == mon)
+            return h;
     }
+
     HWND s = nullptr;
     while ((s = FindWindowExW(nullptr, s, L"Shell_SecondaryTrayWnd", nullptr)) != nullptr) {
-        if (GetWindowRect(s, &r) && MonitorFromRect(&r, MONITOR_DEFAULTTONEAREST) == mon) {
-            *out = r;
-            return true;
+        RECT r;
+        if (GetWindowRect(s, &r) && MonitorFromRect(&r, MONITOR_DEFAULTTONEAREST) == mon)
+            return s;
+    }
+
+    return nullptr;
+}
+
+bool FindTaskbarRect(HMONITOR mon, RECT* out) {
+    HWND h = FindTaskbarHwndForMonitor(mon);
+    if (h && GetWindowRect(h, out)) return true;
+    return false;
+}
+
+std::wstring GetProcessBaseLower(HWND hwnd) {
+    DWORD pid = 0;
+    GetWindowThreadProcessId(hwnd, &pid);
+    if (!pid) return L"";
+
+    HANDLE hProc = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+    if (!hProc) return L"";
+
+    WCHAR path[MAX_PATH] = {};
+    DWORD len = MAX_PATH;
+    std::wstring name;
+
+    if (QueryFullProcessImageNameW(hProc, 0, path, &len)) {
+        name = path;
+
+        size_t slash = name.find_last_of(L'\\');
+        if (slash == std::wstring::npos) slash = name.find_last_of(L'/');
+        if (slash != std::wstring::npos) name = name.substr(slash + 1);
+
+        size_t dot = name.find_last_of(L'.');
+        if (dot != std::wstring::npos && dot > 0) name = name.substr(0, dot);
+    }
+
+    CloseHandle(hProc);
+    LowerString(name);
+    return name;
+}
+
+bool GetTaskbarButtonRect(HWND hwndApp, HWND hTray, RECT* outRect) {
+    if (!hwndApp || !hTray || !outRect) return false;
+
+    HRESULT hr = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+    bool coInit = (hr == S_OK || hr == S_FALSE);
+    bool found = false;
+
+    if (hr == S_OK || hr == S_FALSE || hr == RPC_E_CHANGED_MODE) {
+        IUIAutomation* pAutomation = nullptr;
+
+        HRESULT hrUia = CoCreateInstance(CLSID_CUIAutomation8_Guid, nullptr,
+                                         CLSCTX_INPROC_SERVER, IID_IUIAutomation_Guid,
+                                         (void**)&pAutomation);
+
+        if (FAILED(hrUia)) {
+            hrUia = CoCreateInstance(CLSID_CUIAutomation_Guid, nullptr,
+                                     CLSCTX_INPROC_SERVER, IID_IUIAutomation_Guid,
+                                     (void**)&pAutomation);
+        }
+
+        if (SUCCEEDED(hrUia) && pAutomation) {
+            IUIAutomationElement* pTrayElement = nullptr;
+
+            if (SUCCEEDED(pAutomation->ElementFromHandle(hTray, &pTrayElement)) && pTrayElement) {
+                WCHAR titleW[512] = {};
+                GetWindowTextW(hwndApp, titleW, 512);
+
+                std::wstring titleLower = titleW;
+                LowerString(titleLower);
+
+                std::wstring procLower = GetProcessBaseLower(hwndApp);
+                std::wstring hintLower = procLower;
+
+                if (procLower == L"chrome") hintLower = L"google chrome";
+                else if (procLower == L"msedge") hintLower = L"microsoft edge";
+                else if (procLower == L"firefox") hintLower = L"firefox";
+                else if (procLower == L"brave") hintLower = L"brave";
+                else if (procLower == L"opera") hintLower = L"opera";
+                else if (procLower == L"vivaldi") hintLower = L"vivaldi";
+
+                IUIAutomationCondition* pButtonCond = nullptr;
+                IUIAutomationCondition* pListItemCond = nullptr;
+                IUIAutomationCondition* pOrCond = nullptr;
+
+                VARIANT v;
+                VariantInit(&v);
+                v.vt = VT_I4;
+
+                v.lVal = (int)UIA_ButtonControlTypeId;
+                pAutomation->CreatePropertyCondition((PROPERTYID)UIA_ControlTypePropertyId, v,
+                                                     &pButtonCond);
+
+                v.lVal = (int)UIA_ListItemControlTypeId;
+                pAutomation->CreatePropertyCondition((PROPERTYID)UIA_ControlTypePropertyId, v,
+                                                     &pListItemCond);
+
+                if (pButtonCond && pListItemCond)
+                    pAutomation->CreateOrCondition(pButtonCond, pListItemCond, &pOrCond);
+
+                IUIAutomationElementArray* pArray = nullptr;
+                if (pOrCond && SUCCEEDED(pTrayElement->FindAll((TreeScope)TreeScope_Descendants,
+                                                               pOrCond, &pArray)) &&
+                    pArray) {
+                    int length = 0;
+                    pArray->get_Length(&length);
+
+                    int bestScore = 0;
+                    IUIAutomationElement* bestItem = nullptr;
+
+                    for (int i = 0; i < length; i++) {
+                        IUIAutomationElement* pItem = nullptr;
+                        if (SUCCEEDED(pArray->GetElement(i, &pItem)) && pItem) {
+                            BSTR name = nullptr;
+                            if (SUCCEEDED(pItem->get_CurrentName(&name)) && name) {
+                                std::wstring uiaNameLower = name;
+                                LowerString(uiaNameLower);
+
+                                if (!uiaNameLower.empty()) {
+                                    int score = 0;
+
+                                    if (!titleLower.empty()) {
+                                        if (titleLower == uiaNameLower) score += 1200;
+                                        if (titleLower.find(uiaNameLower) != std::wstring::npos)
+                                            score += 600;
+                                        if (uiaNameLower.find(titleLower) != std::wstring::npos)
+                                            score += 600;
+                                    }
+
+                                    if (!procLower.empty()) {
+                                        if (uiaNameLower == procLower) score += 900;
+                                        if (uiaNameLower.find(procLower) != std::wstring::npos)
+                                            score += 450;
+                                    }
+
+                                    if (!hintLower.empty() && hintLower != procLower &&
+                                        uiaNameLower.find(hintLower) != std::wstring::npos) {
+                                        score += 450;
+                                    }
+
+                                    if (score > bestScore) {
+                                        if (bestItem) bestItem->Release();
+                                        bestItem = pItem;
+                                        bestItem->AddRef();
+                                        bestScore = score;
+                                    }
+                                }
+
+                                SysFreeString(name);
+                            }
+
+                            pItem->Release();
+                        }
+                    }
+
+                    if (bestItem && bestScore >= 400) {
+                        RECT r = {};
+                        if (SUCCEEDED(bestItem->get_CurrentBoundingRectangle(&r)) &&
+                            r.right > r.left && r.bottom > r.top) {
+                            *outRect = r;
+                            found = true;
+                        }
+                    }
+
+                    if (bestItem) bestItem->Release();
+                    pArray->Release();
+                }
+
+                if (pOrCond) pOrCond->Release();
+                if (pListItemCond) pListItemCond->Release();
+                if (pButtonCond) pButtonCond->Release();
+                pTrayElement->Release();
+            }
+
+            pAutomation->Release();
         }
     }
-    return false;
+
+    if (coInit) CoUninitialize();
+    return found;
 }
 
 Dock ComputeDock(HWND hwnd, const RECT& fr, UINT dpi) {
@@ -563,16 +1094,22 @@ Dock ComputeDock(HWND hwnd, const RECT& fr, UINT dpi) {
     d.half = MulDiv(22, dpi, 96);
 
     HMONITOR mon = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+
     MONITORINFO mi = {};
     mi.cbSize = sizeof(mi);
     GetMonitorInfoW(mon, &mi);
 
-    RECT tb;
-    if (!FindTaskbarRect(mon, &tb)) {  // auto-hidden or missing: assume a bottom bar
+    HWND hTray = FindTaskbarHwndForMonitor(mon);
+    RECT tb = {};
+    bool hasTaskbar = hTray && GetWindowRect(hTray, &tb);
+
+    if (!hasTaskbar) {
         tb = {mi.rcMonitor.left, mi.rcMonitor.bottom - MulDiv(48, dpi, 96), mi.rcMonitor.right,
               mi.rcMonitor.bottom};
     }
-    const int tbw = tb.right - tb.left, tbh = tb.bottom - tb.top;
+
+    const int tbw = tb.right - tb.left;
+    const int tbh = tb.bottom - tb.top;
     const int mcx = (mi.rcMonitor.left + mi.rcMonitor.right) / 2;
     const int mcy = (mi.rcMonitor.top + mi.rcMonitor.bottom) / 2;
     const int winCx = (fr.left + fr.right) / 2;
@@ -580,22 +1117,129 @@ Dock ComputeDock(HWND hwnd, const RECT& fr, UINT dpi) {
 
     if (tbw >= tbh) {
         d.edge = ((tb.top + tb.bottom) / 2 >= mcy) ? Edge::Bottom : Edge::Top;
-        int x = (tb.left + tb.right) / 2;
-        if (g_cfg.genieNearWindow)
-            x = std::clamp(winCx, (int)tb.left + d.half, std::max((int)tb.left + d.half, (int)tb.right - d.half));
-        d.pt.x = x;
-        d.pt.y = (d.edge == Edge::Bottom) ? tb.top + tbh * 45 / 100 : tb.bottom - tbh * 45 / 100;
+
+        LONG x = (tb.left + tb.right) / 2;
+        RECT btn = {};
+
+        if (hasTaskbar && GetTaskbarButtonRect(hwnd, hTray, &btn)) {
+            x = (btn.left + btn.right) / 2;
+
+            int btnHalf = (int)((btn.right - btn.left) / 2);
+            int minHalf = MulDiv(8, dpi, 96);
+            int maxHalf = MulDiv(32, dpi, 96);
+            if (maxHalf < minHalf) maxHalf = minHalf;
+
+            d.half = std::clamp(btnHalf, minHalf, maxHalf);
+        } else if (g_cfg.genieNearWindow) {
+            x = (LONG)winCx;
+        }
+
+        LONG lo = tb.left + d.half;
+        LONG hi = tb.right - d.half;
+
+        if (hi < lo) {
+            x = (tb.left + tb.right) / 2;
+        } else {
+            x = std::clamp(x, lo, hi);
+        }
+
+        d.pt.x = (int)x;
+        d.pt.y = (int)((tb.top + tb.bottom) / 2);
     } else {
         d.edge = ((tb.left + tb.right) / 2 >= mcx) ? Edge::Right : Edge::Left;
-        d.pt.y = std::clamp(winCy, (int)tb.top + d.half, std::max((int)tb.top + d.half, (int)tb.bottom - d.half));
-        d.pt.x = (d.edge == Edge::Left) ? tb.right - tbw * 45 / 100 : tb.left + tbw * 45 / 100;
+
+        LONG y = (tb.top + tb.bottom) / 2;
+        RECT btn = {};
+
+        if (hasTaskbar && GetTaskbarButtonRect(hwnd, hTray, &btn)) {
+            y = (btn.top + btn.bottom) / 2;
+
+            int btnHalf = (int)((btn.bottom - btn.top) / 2);
+            int minHalf = MulDiv(8, dpi, 96);
+            int maxHalf = MulDiv(32, dpi, 96);
+            if (maxHalf < minHalf) maxHalf = minHalf;
+
+            d.half = std::clamp(btnHalf, minHalf, maxHalf);
+        } else {
+            y = (LONG)winCy;
+        }
+
+        LONG lo = tb.top + d.half;
+        LONG hi = tb.bottom - d.half;
+
+        if (hi < lo) {
+            y = (tb.top + tb.bottom) / 2;
+        } else {
+            y = std::clamp(y, lo, hi);
+        }
+
+        d.pt.y = (int)y;
+        d.pt.x = (int)((tb.left + tb.right) / 2);
     }
+
     return d;
 }
 
-// ============================================================================
-//  The animation
-// ============================================================================
+class Renderer {
+   public:
+    FrameCtx ctx;
+
+    Renderer() = default;
+    Renderer(const Renderer&) = delete;
+    Renderer& operator=(const Renderer&) = delete;
+
+    ~Renderer() {
+        if (m_work) {
+            WaitForThreadpoolWorkCallbacks(m_work, TRUE);
+            CloseThreadpoolWork(m_work);
+        }
+    }
+
+    void Init() {
+        SYSTEM_INFO si = {};
+        GetSystemInfo(&si);
+
+        m_extra = std::clamp((int)si.dwNumberOfProcessors - 1, 0, 3);
+        if (m_extra > 0) {
+            m_work = CreateThreadpoolWork(&Renderer::Callback, this, nullptr);
+            if (!m_work) m_extra = 0;
+        }
+    }
+
+    void Run(long long pixels) {
+        m_next = 0;
+
+        if (m_extra > 0 && pixels > 150000) {
+            for (int i = 0; i < m_extra; i++) SubmitThreadpoolWork(m_work);
+            Worker();
+            WaitForThreadpoolWorkCallbacks(m_work, FALSE);
+        } else {
+            Worker();
+        }
+    }
+
+   private:
+    static VOID CALLBACK Callback(PTP_CALLBACK_INSTANCE, PVOID self, PTP_WORK) {
+        static_cast<Renderer*>(self)->Worker();
+    }
+
+    void Worker() {
+        constexpr int kChunk = 8;
+        Scratch sc;
+        sc.Init(ctx.py->w[0], ctx.bw);
+
+        for (;;) {
+            const LONG i = InterlockedIncrement(&m_next) - 1;
+            const int y0 = (int)i * kChunk;
+            if (y0 >= ctx.bh) break;
+            RenderRows(ctx, y0, std::min(ctx.bh, y0 + kChunk), sc);
+        }
+    }
+
+    PTP_WORK m_work = nullptr;
+    int m_extra = 0;
+    volatile LONG m_next = 0;
+};
 
 class Anim {
    public:
@@ -606,7 +1250,6 @@ class Anim {
     Anim& operator=(const Anim&) = delete;
     ~Anim() { End(); }
 
-    // Open animation only: the window was cloaked by the caller; End() un-cloaks it.
     void MarkCloaked(HWND hwnd) {
         m_target = hwnd;
         m_cloaked = true;
@@ -617,27 +1260,40 @@ class Anim {
         m_started = true;
         m_target = hwnd;
         m_kind = kind;
-        if (g_pSetThreadDpi) m_oldDpi = g_pSetThreadDpi((HANDLE)(INT_PTR)-4);  // PER_MONITOR_AWARE_V2
+
+        if (g_api.SetThreadDpiAwarenessContext)
+            m_oldDpi = g_api.SetThreadDpiAwarenessContext((HANDLE)(INT_PTR)-4);
 
         RECT wr, fr;
         if (!GetWindowRect(hwnd, &wr)) return false;
-        if (FAILED(DwmGetWindowAttribute(hwnd, kDwmExtendedFrameBounds, &fr, sizeof(fr)))) fr = wr;
+
+        if (FAILED(g_api.DwmGetWindowAttribute(hwnd, kDwmExtendedFrameBounds, &fr, sizeof(fr))))
+            fr = wr;
+
         if (fr.left < wr.left || fr.top < wr.top || fr.right > wr.right || fr.bottom > wr.bottom)
             fr = wr;
 
-        const int ww = wr.right - wr.left, wh = wr.bottom - wr.top;
-        const int fw = fr.right - fr.left, fh = fr.bottom - fr.top;
-        if (fw < 120 || fh < 60 || (long long)fw * fh > 8500000LL) return false;  // up to ~4K
+        const int ww = wr.right - wr.left;
+        const int wh = wr.bottom - wr.top;
+        const int fw = fr.right - fr.left;
+        const int fh = fr.bottom - fr.top;
 
-        const UINT dpi = g_pGetDpiForWindow ? g_pGetDpiForWindow(hwnd) : 96;
+        if (fw < 120 || fh < 60 || (long long)fw * fh > 8500000LL) return false;
+
+        UINT dpi = g_api.GetDpiForWindow ? g_api.GetDpiForWindow(hwnd) : 96;
+        if (!dpi) dpi = 96;
+
         const bool zoomed = IsZoomed(hwnd) != FALSE;
-        const int pad = (g_cfg.shadow && !zoomed) ? MulDiv(48, dpi, 96) : 0;
-        const int ow = fw + 2 * pad, oh = fh + 2 * pad;
+        const bool wantShadow = g_cfg.shadow && g_cfg.shadowAlpha > 0.01f && !zoomed;
+        const int pad = wantShadow ? MulDiv(48, dpi, 96) : 0;
+        const int ow = fw + 2 * pad;
+        const int oh = fh + 2 * pad;
 
-        // Corner radius (Windows 11 only; square when maximized).
         int radius = 0;
         DWORD pref = 0;
-        if (SUCCEEDED(DwmGetWindowAttribute(hwnd, kDwmCornerPreference, &pref, sizeof(pref))) &&
+
+        if (SUCCEEDED(g_api.DwmGetWindowAttribute(hwnd, kDwmCornerPreference, &pref,
+                                                  sizeof(pref))) &&
             !zoomed) {
             if (pref == 1) radius = 0;
             else if (pref == 3) radius = MulDiv(4, dpi, 96);
@@ -650,31 +1306,41 @@ class Anim {
             ~ScreenRelease() { ReleaseDC(nullptr, dc); }
         } screenRelease{screen};
 
-        // 1) Capture the window.
         Surface cap;
         if (!cap.Create(screen, ww, wh)) return false;
         if (!PrintWindow(hwnd, cap.dc, PW_RENDERFULLCONTENT)) return false;
-        const uint32_t* capPx = (const uint32_t*)cap.bits;
-        const int ox = fr.left - wr.left, oy = fr.top - wr.top;
-        if (kind == Open && LooksBlank(capPx + (size_t)oy * ww + ox, fw, fh)) return false;
 
-        // 2) Premultiplied artwork: shadow + window with rounded corners.
+        const uint32_t* capPx = (const uint32_t*)cap.bits;
+        const int ox = fr.left - wr.left;
+        const int oy = fr.top - wr.top;
+        const uint32_t* framePx = capPx + (size_t)oy * ww + ox;
+
+        if (CaptureFailed(framePx, ww, fw, fh)) return false;
+        if (kind == Open && LooksBlank(framePx, ww, fw, fh)) return false;
+
         if (!m_art.Create(screen, ow, oh)) return false;
         uint32_t* art = (uint32_t*)m_art.bits;
 
         auto cov = [&](int x, int y) -> int {
             if (radius <= 0) return 255;
+
             float dx = 0, dy = 0;
+
             if (x < radius) dx = radius - (x + 0.5f);
             else if (x >= fw - radius) dx = (x + 0.5f) - (fw - radius);
+
             if (y < radius) dy = radius - (y + 0.5f);
             else if (y >= fh - radius) dy = (y + 0.5f) - (fh - radius);
+
             if (dx <= 0 || dy <= 0) return 255;
+
             float c = radius - std::sqrt(dx * dx + dy * dy) + 0.5f;
             return c <= 0 ? 0 : (c >= 1 ? 255 : (int)(c * 255 + 0.5f));
         };
+
         auto covRow = [&](int y, uint8_t* out) {
             memset(out, 255, fw);
+
             if (radius > 0 && (y < radius || y >= fh - radius)) {
                 for (int x = 0; x < radius; x++) {
                     out[x] = (uint8_t)cov(x, y);
@@ -682,220 +1348,371 @@ class Anim {
                 }
             }
         };
+
         std::vector<uint8_t> rowCov(fw);
 
-        if (pad > 0) {
-            std::vector<uint8_t> mask((size_t)ow * oh, 0);
-            const int offY = pad / 4;  // light comes from above
-            for (int y = 0; y < fh; y++) {
-                covRow(y, rowCov.data());
-                memcpy(&mask[(size_t)(pad + offY + y) * ow + pad], rowCov.data(), fw);
-            }
-            const int br = std::max(1, pad / 3);
-            BoxBlur(mask, ow, oh, br);
-            BoxBlur(mask, ow, oh, br);
-            for (size_t i = 0; i < mask.size(); i++)
-                art[i] = (uint32_t)(mask[i] * 38 / 100) << 24;  // black, ~38% max opacity
-        }
+        if (pad > 0)
+            BuildShadow(art, ow, oh, pad, pad / 4, fw, fh, radius + 2, g_cfg.shadowAlpha);
 
         for (int y = 0; y < fh; y++) {
             covRow(y, rowCov.data());
-            const uint32_t* s = capPx + (size_t)(oy + y) * ww + ox;
+
+            const uint32_t* s = framePx + (size_t)y * ww;
             uint32_t* d = art + (size_t)(pad + y) * ow + pad;
+
             for (int x = 0; x < fw; x++) {
                 const uint32_t c = rowCov[x];
                 const uint32_t px = s[x];
+
                 if (c == 255) {
                     d[x] = 0xFF000000u | (px & 0x00FFFFFFu);
                 } else if (c != 0) {
                     uint32_t r = ((px >> 16) & 0xFF) * c / 255;
                     uint32_t g = ((px >> 8) & 0xFF) * c / 255;
                     uint32_t b = (px & 0xFF) * c / 255;
-                    uint32_t sa = d[x] >> 24;  // shadow alpha underneath
+                    uint32_t sa = d[x] >> 24;
                     uint32_t a = c + sa * (255 - c) / 255;
                     d[x] = (a << 24) | (r << 16) | (g << 8) | b;
                 }
             }
         }
-        cap.Free();
 
-        // 3) Geometry of the overlay for this kind of animation.
+        cap.Free();
+        m_pyr.Build(art, ow, oh);
+
         m_aw = ow;
         m_ah = oh;
+
         const RECT A = {fr.left - pad, fr.top - pad, fr.right + pad, fr.bottom + pad};
+        bool topmost = false;
+
         if (kind == Minimize) {
             const Dock dock = ComputeDock(hwnd, fr, dpi);
+
             m_genie = g_cfg.minStyle == MinStyle::Genie &&
                       (dock.edge == Edge::Bottom || dock.edge == Edge::Top);
-            long dxs = dock.pt.x, dys = dock.pt.y;
+
+            topmost = IsFrontmostIn(hwnd, wr);
+            m_slow = g_cfg.shiftSlow && (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
+
+            const long dxs = dock.pt.x;
+            const long dys = dock.pt.y;
+
             long L, T, R, B;
+
             if (m_genie) {
                 const bool top = dock.edge == Edge::Top;
-                // The dock point must lie beyond the picture so rows stay in order.
-                if (top) dys = std::min(dys, A.top - 2L);
-                else dys = std::max(dys, A.bottom + 2L);
-                L = std::min((long)A.left, dxs - dock.half - 2);
-                R = std::max((long)A.right, dxs + dock.half + 2);
-                T = top ? dys - 2 : A.top;
-                B = top ? A.bottom : dys + 2;
+                const long margin = 2;
+                const float iconH = std::max(8.f, dock.half * 1.5f);
+
+                const float farEdge = top ? (float)A.bottom : (float)A.top;
+                const float dockC = top ? (farEdge - (float)dys) : ((float)dys - farEdge);
+
+                const float top0 = (float)margin;
+                const float bot0 = top0 + (float)oh;
+
+                float dockTop = (float)margin + dockC - iconH * 0.5f;
+                dockTop = std::max(dockTop,
+                                   top0 + std::max(0.35f * oh, 60.f * dpi / 96.f));
+
+                const float dockBot = dockTop + iconH;
+                const float bhC = std::ceil(std::max(dockBot, bot0)) + (float)margin;
+
+                L = std::min((long)A.left, dxs - dock.half - margin) - margin;
+                R = std::max((long)A.right, dxs + dock.half + margin) + margin;
+
+                const long bhL = (long)bhC;
+
+                if (top) {
+                    B = A.bottom + margin;
+                    T = B - bhL;
+                } else {
+                    T = A.top - margin;
+                    B = T + bhL;
+                }
+
                 m_geo.flip = top;
                 m_geo.ax = (float)(A.left - L);
                 m_geo.aw = (float)ow;
+                m_geo.ay = top0;
                 m_geo.ah = (float)oh;
-                m_geo.ay = top ? (float)(B - A.bottom) : (float)(A.top - T);
-                m_geo.dx = (float)(dxs - L);
-                m_geo.dy = top ? (float)(B - dys) : (float)(dys - T);
-                m_geo.hwMin = std::max(3.f, (float)dock.half * 0.6f);
+                m_geo.dxL = (float)(dxs - L - dock.half);
+                m_geo.dxR = (float)(dxs - L + dock.half);
+                m_geo.dockTop = dockTop;
+                m_geo.dockBot = dockBot;
             } else {
                 L = std::min((long)A.left, dxs - 2);
                 R = std::max((long)A.right, dxs + 2);
                 T = std::min((long)A.top, dys - 2);
                 B = std::max((long)A.bottom, dys + 2);
+
                 m_cx0 = (float)((A.left + A.right) * 0.5 - L);
                 m_cy0 = (float)((A.top + A.bottom) * 0.5 - T);
                 m_cx1 = (float)(dxs - L);
                 m_cy1 = (float)(dys - T);
                 m_sEnd = std::max(0.04f, (float)(2 * dock.half) / (float)fw);
             }
+
             m_pos = {L, T};
             m_bw = (int)(R - L);
             m_bh = (int)(B - T);
         } else {
-            m_pos = {A.left, A.top};
-            m_bw = ow;
-            m_bh = oh;
-            m_cx0 = ow * 0.5f;
-            m_cy0 = oh * 0.5f;
+            int affMargin = (kind == Open) ? MulDiv(16, dpi, 96) : 0;
+
+            m_pos = {A.left - affMargin, A.top - affMargin};
+            m_bw = ow + 2 * affMargin;
+            m_bh = oh + 2 * affMargin;
+            m_cx0 = affMargin + ow * 0.5f;
+            m_cy0 = affMargin + oh * 0.5f;
         }
+
         if (m_bw < 1 || m_bh < 1 || (long long)m_bw * m_bh > 24000000LL) return false;
         if (!m_frame.Create(screen, m_bw, m_bh)) return false;
-        m_rows.assign((size_t)m_bh, RowMap());
 
-        // 4) Overlay window, placed just above the target window in z-order.
+        m_rows.assign((size_t)m_bh, RowMap());
+        m_spans.assign((size_t)m_bh, RowSpan());
+        m_renderer.Init();
+
         if (!EnsureOverlayClass()) return false;
+
         m_overlay = CreateWindowExW(
             WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW,
             kOverlayClass, L"", WS_POPUP, m_pos.x, m_pos.y, m_bw, m_bh, nullptr, nullptr,
             GetModuleHandleW(nullptr), nullptr);
+
         if (!m_overlay) return false;
 
         Frame(0.0);
+
         HWND prev = GetWindow(hwnd, GW_HWNDPREV);
-        HWND after = prev ? prev
-                          : ((GetWindowLongPtrW(hwnd, GWL_EXSTYLE) & WS_EX_TOPMOST) ? HWND_TOPMOST
-                                                                                    : HWND_TOP);
+        HWND after = topmost ? HWND_TOPMOST
+                             : (prev ? prev
+                                     : ((GetWindowLongPtrW(hwnd, GWL_EXSTYLE) & WS_EX_TOPMOST)
+                                            ? HWND_TOPMOST
+                                            : HWND_TOP));
+
         SetWindowPos(m_overlay, after, m_pos.x, m_pos.y, m_bw, m_bh,
                      SWP_NOACTIVATE | SWP_SHOWWINDOW);
 
-        // 5) Turn off Windows' own transition, then wait one composition so the
-        //    overlay is on screen before the real window changes.
         BOOL on = TRUE;
-        DwmSetWindowAttribute(hwnd, kDwmTransitionsForceDisabled, &on, sizeof(on));
+        g_api.DwmSetWindowAttribute(hwnd, kDwmTransitionsForceDisabled, &on, sizeof(on));
         m_transDisabled = true;
-        DwmFlush();
+
+        g_api.DwmFlush();
         return true;
     }
 
     void Play() {
         if (!m_overlay) return;
-        LARGE_INTEGER freq, t0, now;
+
+        LARGE_INTEGER freq, wall0, now;
         QueryPerformanceFrequency(&freq);
-        QueryPerformanceCounter(&t0);
-        const double dur = (double)DurationMs();
+        QueryPerformanceCounter(&wall0);
+
+        const double fq = (double)freq.QuadPart;
+        const double durMs = (double)DurationMs();
+
+        HANDLE th = GetCurrentThread();
+        const int oldPrio = GetThreadPriority(th);
+        SetThreadPriority(th, THREAD_PRIORITY_HIGHEST);
+
+        HANDLE mm = nullptr;
+        if (g_api.AvSetMmThreadCharacteristicsW) {
+            DWORD idx = 0;
+            mm = g_api.AvSetMmThreadCharacteristicsW(L"Playback", &idx);
+        }
+
+        long long t0 = 0, lastPresent = -1;
+        bool haveT0 = false;
+
         for (;;) {
+            if (FAILED(g_api.DwmFlush())) Sleep(4);
             QueryPerformanceCounter(&now);
-            const double ms = (double)(now.QuadPart - t0.QuadPart) * 1000.0 / (double)freq.QuadPart;
-            const double t = ms / dur;
-            if (t >= 1.0 || ms > dur * 3.0) break;
+
+            long long present = now.QuadPart;
+
+            if (g_api.DwmGetCompositionTimingInfo) {
+                DWM_TIMING_INFO ti = {};
+                ti.cbSize = sizeof(ti);
+
+                if (SUCCEEDED(g_api.DwmGetCompositionTimingInfo(nullptr, &ti)) &&
+                    ti.qpcRefreshPeriod > 0 && ti.qpcVBlank > 0) {
+                    const double period = (double)ti.qpcRefreshPeriod;
+                    const double k =
+                        std::floor(((double)now.QuadPart - (double)ti.qpcVBlank) / period) + 1.0;
+                    present = (long long)((double)ti.qpcVBlank + k * period);
+                }
+            }
+
+            if (present == lastPresent) {
+                Sleep(1);
+                continue;
+            }
+
+            lastPresent = present;
+
+            if (!haveT0) {
+                t0 = present;
+                haveT0 = true;
+            }
+
+            const double ms = (double)(present - t0) * 1000.0 / fq;
+            const double t = ms / durMs;
+            const double wallMs = (double)(now.QuadPart - wall0.QuadPart) * 1000.0 / fq;
+
+            if (t >= 1.0 || wallMs > durMs * 2.0 + 300.0) break;
+
             Frame(t);
-            if (FAILED(DwmFlush())) Sleep(4);
         }
-        if (m_kind == Open) {  // exact final pixels before the real window is un-cloaked
+
+        if (m_kind == Open) {
             Frame(1.0);
-            DwmFlush();
+            g_api.DwmFlush();
         }
+
+        if (mm && g_api.AvRevertMmThreadCharacteristics)
+            g_api.AvRevertMmThreadCharacteristics(mm);
+
+        SetThreadPriority(th, oldPrio);
     }
 
    private:
     int DurationMs() const {
+        int ms = g_cfg.minMs;
+
         switch (m_kind) {
-            case Close: return g_cfg.closeMs;
-            case Open: return g_cfg.openMs;
-            default: return g_cfg.minMs;
+            case Close: ms = g_cfg.closeMs; break;
+            case Open: ms = g_cfg.openMs; break;
+            default: ms = g_cfg.minMs; break;
         }
+
+        if (m_slow) ms = std::min(ms * 5, 6000);
+        return ms;
     }
 
-    // Renders animation time t (0..1) into the overlay.
     void Frame(double t) {
         double alpha = 1.0;
+        float minification = 1.f;
+
         switch (m_kind) {
             case Close: {
-                const double s = 1.0 - (1.0 - g_cfg.closeScale) * EaseOutCubic(t);
-                alpha = 1.0 - EaseInOutSine(t);
-                BuildAffine(m_rows, m_bh, m_cx0, m_cy0, (float)m_aw, (float)m_ah, (float)s);
+                const double scaleT = EaseInQuad(t);
+                const double s = 1.0 - (1.0 - g_cfg.closeScale) * scaleT;
+                alpha = 1.0 - EaseInQuad(t);
+                minification = BuildAffine(m_rows, m_bh, m_cx0, m_cy0, (float)m_aw,
+                                           (float)m_ah, (float)s);
                 break;
             }
+
             case Open: {
-                const double s = g_cfg.openScale + (1.0 - g_cfg.openScale) * EaseOutCubic(t);
-                alpha = EaseOutCubic(std::min(1.0, t / 0.65));
-                BuildAffine(m_rows, m_bh, m_cx0, m_cy0, (float)m_aw, (float)m_ah, (float)s);
+                const double s = g_cfg.openScale + (1.0 - g_cfg.openScale) * EaseOutBack(t);
+                alpha = EaseOutQuint(std::min(1.0, t / 0.65));
+                minification = BuildAffine(m_rows, m_bh, m_cx0, m_cy0, (float)m_aw,
+                                           (float)m_ah, (float)s);
                 break;
             }
+
             case Minimize: {
-                const float p = (float)EaseInOutSine(t);
                 if (m_genie) {
-                    BuildGenie(m_rows, m_yb, m_bh, m_geo, p);
-                    alpha = 1.0 - SmoothStep((p - 0.86f) / 0.14f);
+                    const float p = (float)t;
+                    minification = BuildGenie(m_rows, m_bh, m_geo, p);
+                    alpha = 1.0 - SmoothStep((p - 0.85f) / 0.15f);
                 } else {
+                    const float p = (float)EaseInOutCubic(t);
                     const float s = 1.f + (m_sEnd - 1.f) * p;
                     const float cx = m_cx0 + (m_cx1 - m_cx0) * p;
                     const float cy = m_cy0 + (m_cy1 - m_cy0) * p;
-                    BuildAffine(m_rows, m_bh, cx, cy, (float)m_aw, (float)m_ah, s);
-                    alpha = 1.0 - SmoothStep((p - 0.7f) / 0.3f);
+
+                    minification = BuildAffine(m_rows, m_bh, cx, cy, (float)m_aw, (float)m_ah, s);
+                    alpha = 1.0 - SmoothStep((p - 0.6f) / 0.4f);
                 }
                 break;
             }
         }
 
-        uint32_t* frame = (uint32_t*)m_frame.bits;
-        memset(frame, 0, (size_t)m_bw * m_bh * 4);
-        const uint32_t* art = (const uint32_t*)m_art.bits;
-        for (int y = 0; y < m_bh; y++)
-            RenderRow(frame + (size_t)y * m_bw, m_bw, art, m_aw, m_ah, m_rows[y]);
+        long long pixels = 0;
+        for (const RowMap& r : m_rows)
+            if (r.cov > 0.f) pixels += (long long)(r.xr - r.xl);
+
+        FrameCtx& c = m_renderer.ctx;
+        c.py = &m_pyr;
+        c.rows = m_rows.data();
+        c.spans = m_spans.data();
+        c.frame = (uint32_t*)m_frame.bits;
+        c.bw = m_bw;
+        c.bh = m_bh;
+
+        PickLevels(m_pyr, minification, &c.lvA, &c.lvB, &c.lf);
+        m_renderer.Run(pixels);
+
+        RECT dirty = {m_bw, m_bh, 0, 0};
+
+        for (int y = 0; y < m_bh; y++) {
+            const RowSpan& sp = m_spans[y];
+            if (sp.dirR < sp.dirL) continue;
+
+            dirty.left = std::min<LONG>(dirty.left, sp.dirL);
+            dirty.right = std::max<LONG>(dirty.right, sp.dirR + 1);
+            dirty.top = std::min<LONG>(dirty.top, y);
+            dirty.bottom = std::max<LONG>(dirty.bottom, y + 1);
+        }
 
         POINT ptSrc = {0, 0};
         SIZE sz = {m_bw, m_bh};
-        BLENDFUNCTION bf = {AC_SRC_OVER, 0,
-                            (BYTE)std::clamp((int)std::lround(alpha * 255.0), 0, 255),
-                            AC_SRC_ALPHA};
-        UpdateLayeredWindow(m_overlay, nullptr, &m_pos, &sz, m_frame.dc, &ptSrc, 0, &bf,
-                            ULW_ALPHA);
+
+        int alphaByte = (int)(alpha * 255.0 + 0.5);
+        alphaByte = std::clamp(alphaByte, 0, 255);
+
+        BLENDFUNCTION bf = {AC_SRC_OVER, 0, (BYTE)alphaByte, AC_SRC_ALPHA};
+
+        UPDATELAYEREDWINDOWINFO info = {};
+        info.cbSize = sizeof(info);
+        info.pptDst = &m_pos;
+        info.psize = &sz;
+        info.hdcSrc = m_frame.dc;
+        info.pptSrc = &ptSrc;
+        info.pblend = &bf;
+        info.dwFlags = ULW_ALPHA;
+        info.prcDirty = (!m_firstUpdate && dirty.right > dirty.left && dirty.bottom > dirty.top)
+                            ? &dirty
+                            : nullptr;
+
+        UpdateLayeredWindowIndirect(m_overlay, &info);
+        m_firstUpdate = false;
     }
 
     void End() {
-        if (m_cloaked) {  // open animation: reveal the real window under the overlay
+        if (m_cloaked) {
             if (IsWindow(m_target)) {
                 BOOL off = FALSE;
-                DwmSetWindowAttribute(m_target, kDwmCloak, &off, sizeof(off));
-                if (m_overlay) DwmFlush();
+                g_api.DwmSetWindowAttribute(m_target, kDwmCloak, &off, sizeof(off));
+                if (m_overlay) g_api.DwmFlush();
             }
             m_cloaked = false;
         }
+
         if (m_overlay) {
-            DestroyWindow_Original(m_overlay);  // original: avoids re-entering our hook
+            DestroyWindow_Original(m_overlay);
             m_overlay = nullptr;
         }
+
         if (m_transDisabled) {
-            if (IsWindow(m_target)) {  // hidden-not-destroyed: restore its normal transitions
+            if (IsWindow(m_target)) {
                 BOOL off = FALSE;
-                DwmSetWindowAttribute(m_target, kDwmTransitionsForceDisabled, &off, sizeof(off));
+                g_api.DwmSetWindowAttribute(m_target, kDwmTransitionsForceDisabled, &off,
+                                            sizeof(off));
             }
             m_transDisabled = false;
         }
+
         m_art.Free();
         m_frame.Free();
-        if (m_oldDpi && g_pSetThreadDpi) g_pSetThreadDpi(m_oldDpi);
+
+        if (m_oldDpi && g_api.SetThreadDpiAwarenessContext)
+            g_api.SetThreadDpiAwarenessContext(m_oldDpi);
+
         m_oldDpi = nullptr;
+
         if (m_started) t_busy = false;
         m_started = false;
     }
@@ -904,18 +1721,27 @@ class Anim {
     HWND m_overlay = nullptr;
     HANDLE m_oldDpi = nullptr;
     Kind m_kind = Close;
+
     bool m_started = false;
     bool m_transDisabled = false;
     bool m_cloaked = false;
     bool m_genie = false;
-    int m_aw = 0, m_ah = 0;  // artwork size
-    int m_bw = 0, m_bh = 0;  // overlay (frame) size
+    bool m_slow = false;
+    bool m_firstUpdate = true;
+
+    int m_aw = 0, m_ah = 0;
+    int m_bw = 0, m_bh = 0;
     POINT m_pos = {};
+
     float m_cx0 = 0, m_cy0 = 0, m_cx1 = 0, m_cy1 = 0, m_sEnd = 0.1f;
+
     GenieGeom m_geo;
     std::vector<RowMap> m_rows;
-    std::vector<float> m_yb;
+    std::vector<RowSpan> m_spans;
+
     Surface m_art, m_frame;
+    Pyramid m_pyr;
+    Renderer m_renderer;
 };
 
 bool SafePrepare(Anim& anim, HWND hwnd, Anim::Kind kind) {
@@ -925,10 +1751,6 @@ bool SafePrepare(Anim& anim, HWND hwnd, Anim::Kind kind) {
         return false;
     }
 }
-
-// ============================================================================
-//  Hooks
-// ============================================================================
 
 bool IsMinimizeCmd(int cmd) {
     return cmd == SW_MINIMIZE || cmd == SW_SHOWMINIMIZED || cmd == SW_SHOWMINNOACTIVE ||
@@ -942,24 +1764,31 @@ bool IsShowCmd(int cmd) {
 
 BOOL OpenWithAnimation(HWND hWnd, int cmd) {
     BOOL on = TRUE;
-    if (FAILED(DwmSetWindowAttribute(hWnd, kDwmCloak, &on, sizeof(on))))
-        return ShowWindow_Original(hWnd, cmd);  // cloaking not allowed: plain open
+    if (FAILED(g_api.DwmSetWindowAttribute(hWnd, kDwmCloak, &on, sizeof(on))))
+        return ShowWindow_Original(hWnd, cmd);
 
     Anim anim;
-    anim.MarkCloaked(hWnd);  // from here on ~Anim always un-cloaks
+    anim.MarkCloaked(hWnd);
+
     BOOL ret = ShowWindow_Original(hWnd, cmd);
+
     if (IsWindowVisible(hWnd)) {
         RedrawWindow(hWnd, nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW | RDW_ALLCHILDREN);
         if (SafePrepare(anim, hWnd, Anim::Open)) anim.Play();
     }
+
     return ret;
 }
 
 BOOL WINAPI DestroyWindow_Hook(HWND hWnd) {
     Anim anim;
     bool on = false;
-    if (g_cfg.closeOn && ShouldAnimateVisible(hWnd)) on = SafePrepare(anim, hWnd, Anim::Close);
+
+    if (g_cfg.closeOn && ShouldAnimateVisible(hWnd))
+        on = SafePrepare(anim, hWnd, Anim::Close);
+
     BOOL ret = DestroyWindow_Original(hWnd);
+
     if (on && ret) anim.Play();
     return ret;
 }
@@ -968,9 +1797,12 @@ BOOL WINAPI ShowWindow_Hook(HWND hWnd, int nCmdShow) {
     if (nCmdShow == SW_HIDE) {
         if (!g_cfg.closeOn || !g_cfg.animateHide || !ShouldAnimateVisible(hWnd))
             return ShowWindow_Original(hWnd, nCmdShow);
+
         Anim anim;
         const bool on = SafePrepare(anim, hWnd, Anim::Close);
+
         BOOL ret = ShowWindow_Original(hWnd, nCmdShow);
+
         if (on && !IsWindowVisible(hWnd)) anim.Play();
         return ret;
     }
@@ -978,9 +1810,12 @@ BOOL WINAPI ShowWindow_Hook(HWND hWnd, int nCmdShow) {
     if (IsMinimizeCmd(nCmdShow)) {
         if (g_cfg.minStyle == MinStyle::Off || !CanMinimize(hWnd) || !ShouldAnimateVisible(hWnd))
             return ShowWindow_Original(hWnd, nCmdShow);
+
         Anim anim;
         const bool on = SafePrepare(anim, hWnd, Anim::Minimize);
+
         BOOL ret = ShowWindow_Original(hWnd, nCmdShow);
+
         if (on && IsIconic(hWnd)) anim.Play();
         return ret;
     }
@@ -991,45 +1826,48 @@ BOOL WINAPI ShowWindow_Hook(HWND hWnd, int nCmdShow) {
     return ShowWindow_Original(hWnd, nCmdShow);
 }
 
-// Windows closes and minimizes most windows inside DefWindowProc, which never
-// goes through the DestroyWindow / ShowWindow exports.
 LRESULT DefProcImpl(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam, DefProc_t orig) {
     if (msg == WM_CLOSE && g_cfg.closeOn) {
         if (!ShouldAnimateVisible(hWnd)) return orig(hWnd, msg, wParam, lParam);
+
         Anim anim;
         const bool on = SafePrepare(anim, hWnd, Anim::Close);
+
         LRESULT r = orig(hWnd, msg, wParam, lParam);
-        if (on && !IsWindow(hWnd)) anim.Play();  // only if the window really was destroyed
+
+        if (on && !IsWindow(hWnd)) anim.Play();
         return r;
     }
+
     if (msg == WM_SYSCOMMAND && (wParam & 0xFFF0) == SC_MINIMIZE &&
         g_cfg.minStyle != MinStyle::Off) {
         if (!CanMinimize(hWnd) || !ShouldAnimateVisible(hWnd))
             return orig(hWnd, msg, wParam, lParam);
+
         Anim anim;
         const bool on = SafePrepare(anim, hWnd, Anim::Minimize);
+
         LRESULT r = orig(hWnd, msg, wParam, lParam);
+
         if (on && IsIconic(hWnd)) anim.Play();
         return r;
     }
+
     return orig(hWnd, msg, wParam, lParam);
 }
 
 LRESULT WINAPI DefWindowProcW_Hook(HWND h, UINT m, WPARAM w, LPARAM l) {
     return DefProcImpl(h, m, w, l, DefWindowProcW_Original);
 }
+
 LRESULT WINAPI DefWindowProcA_Hook(HWND h, UINT m, WPARAM w, LPARAM l) {
     return DefProcImpl(h, m, w, l, DefWindowProcA_Original);
 }
 
-// ============================================================================
-//  Settings
-// ============================================================================
-
 std::wstring GetStr(PCWSTR name) {
     PCWSTR s = Wh_GetStringSetting(name);
     std::wstring r = s ? s : L"";
-    Wh_FreeStringSetting(s);
+    if (s) Wh_FreeStringSetting(s);
     return r;
 }
 
@@ -1037,27 +1875,36 @@ void LoadSettings() {
     g_cfg.closeOn = Wh_GetIntSetting(L"closeEnabled") != 0;
     g_cfg.closeMs = std::clamp((int)Wh_GetIntSetting(L"closeDuration"), 60, 1000);
     g_cfg.closeScale = std::clamp((int)Wh_GetIntSetting(L"closeScale"), 50, 100) / 100.0;
+
     g_cfg.openOn = Wh_GetIntSetting(L"openEnabled") != 0;
     g_cfg.openMs = std::clamp((int)Wh_GetIntSetting(L"openDuration"), 60, 1000);
     g_cfg.openScale = std::clamp((int)Wh_GetIntSetting(L"openScale"), 50, 100) / 100.0;
+
     g_cfg.minMs = std::clamp((int)Wh_GetIntSetting(L"minimizeDuration"), 100, 2000);
 
     const std::wstring style = GetStr(L"minimizeStyle");
     g_cfg.minStyle = style == L"off" ? MinStyle::Off
                      : style == L"scale" ? MinStyle::Scale
                                          : MinStyle::Genie;
+
     g_cfg.genieNearWindow = GetStr(L"genieTarget") == L"window";
+    g_cfg.shiftSlow = Wh_GetIntSetting(L"shiftSlowMotion") != 0;
 
     g_cfg.shadow = Wh_GetIntSetting(L"shadow") != 0;
+    g_cfg.shadowAlpha = std::clamp((int)Wh_GetIntSetting(L"shadowStrength"), 0, 100) / 100.0f;
+
     g_cfg.animateHide = Wh_GetIntSetting(L"animateHide") != 0;
     g_cfg.hookDefProc = Wh_GetIntSetting(L"hookDefWindowProc") != 0;
 
     g_cfg.excluded.clear();
+
     for (int i = 0;; i++) {
         PCWSTR s = Wh_GetStringSetting(L"excludedPrograms[%d]", i);
-        bool has = *s != L'\0';
+        bool has = s && *s;
+
         if (has) g_cfg.excluded.emplace_back(s);
-        Wh_FreeStringSetting(s);
+        if (s) Wh_FreeStringSetting(s);
+
         if (!has) break;
     }
 }
@@ -1065,10 +1912,13 @@ void LoadSettings() {
 bool IsExcludedProcess() {
     WCHAR path[MAX_PATH] = {};
     GetModuleFileNameW(nullptr, path, MAX_PATH);
+
     const WCHAR* name = wcsrchr(path, L'\\');
     name = name ? name + 1 : path;
+
     for (const auto& e : g_cfg.excluded)
         if (_wcsicmp(name, e.c_str()) == 0) return true;
+
     return false;
 }
 
@@ -1076,38 +1926,39 @@ bool IsExcludedProcess() {
 
 BOOL Wh_ModInit() {
     LoadSettings();
+
     if (IsExcludedProcess()) return FALSE;
     if (!LoadImports()) return FALSE;
 
-    HMODULE user32 = GetModuleHandleW(L"user32.dll");
-    if (user32) {
-        g_pSetThreadDpi =
-            (SetThreadDpiAwarenessContext_t)GetProcAddress(user32, "SetThreadDpiAwarenessContext");
-        g_pGetDpiForWindow = (GetDpiForWindow_t)GetProcAddress(user32, "GetDpiForWindow");
-    }
-
     Wh_SetFunctionHook((void*)DestroyWindow, (void*)DestroyWindow_Hook,
                        (void**)&DestroyWindow_Original);
-    Wh_SetFunctionHook((void*)ShowWindow, (void*)ShowWindow_Hook, (void**)&ShowWindow_Original);
+
+    Wh_SetFunctionHook((void*)ShowWindow, (void*)ShowWindow_Hook,
+                       (void**)&ShowWindow_Original);
+
     if (g_cfg.hookDefProc) {
         Wh_SetFunctionHook((void*)DefWindowProcW, (void*)DefWindowProcW_Hook,
                            (void**)&DefWindowProcW_Original);
+
         Wh_SetFunctionHook((void*)DefWindowProcA, (void*)DefWindowProcA_Hook,
                            (void**)&DefWindowProcA_Original);
     }
+
     return TRUE;
 }
 
 void Wh_ModUninit() {
     AcquireSRWLockExclusive(&g_classLock);
+
     if (g_classRegistered) {
         UnregisterClassW(kOverlayClass, GetModuleHandleW(nullptr));
         g_classRegistered = false;
     }
+
     ReleaseSRWLockExclusive(&g_classLock);
 }
 
 BOOL Wh_ModSettingsChanged(BOOL* bReload) {
-    *bReload = TRUE;  // reload so the exclusion list is re-evaluated per process
+    *bReload = TRUE;
     return TRUE;
 }
