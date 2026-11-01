@@ -1,1964 +1,2855 @@
 // ==WindhawkMod==
 // @id              macos-window-animations
-// @name            macOS Window Animations (Exact Taskbar Button)
-// @description     macOS-style close/open/minimize animations with exact taskbar button targeting, smooth easing, shadows and rounded corners.
-// @version         1.0.0
+// @name            macOS Window Animations (Ultimate Edition)
+// @description     macOS-style window animations for Windows: genie minimize/restore aimed at the exact taskbar button, pop-in launch, scale-and-fade close, Shift slow-motion, smooth easing and taskbar auto-hide support.
+// @version         0.1.0
 // @author          Charles-28X
 // @github          https://github.com/Charles-28X
 // @include         *
-// @exclude         csrss.exe
-// @exclude         dwm.exe
-// @exclude         winlogon.exe
-// @exclude         LogonUI.exe
-// @exclude         fontdrvhost.exe
-// @exclude         SearchHost.exe
-// @exclude         StartMenuExperienceHost.exe
-// @exclude         ShellExperienceHost.exe
-// @exclude         TextInputHost.exe
-// @compilerOptions -lole32 -loleaut32 -luuid
+// @compilerOptions -ldwmapi -lgdi32 -ld2d1 -lole32 -loleaut32 -luuid -lshell32
 // @license         MIT
 // ==/WindhawkMod==
 
 // ============================================================================
 //  Author profile : https://github.com/Charles-28X
-//  Related repo   : https://github.com/Charles-28X/MacOS-Animation
+//  Related repo   : https://github.com/Charles-28X/macos-window-animations
 // ============================================================================
 
 // ==WindhawkModReadme==
 /*
-macOS Window Animations (Exact Taskbar Button)
+# macOS Window Animations (Ultimate Edition)
 
-- Close: smooth shrink + fade.
-- Open: optional macOS-like pop-in with slight overshoot.
-- Minimize: Genie or Scale.
-- Genie now tries to aim at the exact taskbar button using UI Automation.
-- Hold Shift while minimizing for slow motion.
+macOS-style window animations for Windows 10/11.
+
+## What you get
+- **Genie minimize / restore** - the window is warped by the macOS "lamp" curve and
+  poured into the *exact* taskbar button of that window (UI Automation + AppUserModelID
+  matching, with cursor tracking when you click the taskbar button itself).
+- **Pop launch and scale-and-fade close** - the real macOS behaviour for opening and closing
+  windows: a gentle scale from ~92 % with a fade. A genie is still available for both if
+  you prefer it (Launch style / Close style).
+- **Shift slow-motion** - hold **Shift** while minimizing or restoring and the genie plays
+  in slow motion, exactly like macOS (factor is configurable).
+- **Real easing curves** - cubic-bezier presets (macOS, ease-in-out, ease-out, ease-in,
+  linear) chosen separately for minimize and restore.
+- **Dock depth** - the genie tip dives into the taskbar button instead of stopping at the
+  taskbar's edge (percentage of the taskbar height, configurable).
+- **Rounded corners baked into the snapshot** - Windows 11 corners warp with the genie
+  instead of being clipped by a per-frame mask.
+- **Auto-hide taskbar support, multi-monitor targeting, per-program exclusion list.**
+- **Safe unloading** - all worker threads are joined before the mod is removed.
+
+## Tips
+- Every feature has its own switch in the settings; turn off anything you do not want.
+- If an app misbehaves, add its process name (e.g. `WindowsTerminal.exe`) to **Excluded programs**.
+- Modern genie = Direct2D mesh warp (best quality). Classic genie = lighter GDI strip warp.
 */
 // ==/WindhawkModReadme==
 
 // ==WindhawkModSettings==
 /*
-- closeEnabled: true
-  $name: Close animation
-- closeDuration: 180
-  $name: Close duration (ms)
-- closeScale: 95
-  $name: Close shrink to (%)
-- openEnabled: false
-  $name: Open animation (experimental)
-- openDuration: 220
-  $name: Open duration (ms)
-- openScale: 92
-  $name: Open starts at (%)
-- minimizeStyle: genie
-  $name: Minimize style
+- duration_ms: 450
+  $name: Genie duration (ms)
+  $description: How long the genie minimize / restore lasts. Clamped to 50-2000.
+- minimize_easing: macos
+  $name: Minimize easing
+  $description: Timing curve of the genie when a window goes into the taskbar.
   $options:
-  - genie: Genie (macOS)
-  - scale: Scale
-  - off: Off (Windows default)
-- minimizeDuration: 450
-  $name: Minimize duration (ms)
-- genieTarget: center
-  $name: Genie fallback target
+  - macos: macOS (slow start, fast middle, soft landing)
+  - ease_in_out: Ease in-out (symmetrical)
+  - ease_out: Ease out (fast start, long settle)
+  - ease_in: Ease in (slow start, fast finish)
+  - linear: Linear
+- restore_easing: macos
+  $name: Restore easing
+  $description: Timing curve of the genie when a window comes back out of the taskbar.
   $options:
-  - center: Taskbar centre
-  - window: Below window
-- shiftSlowMotion: true
-  $name: Hold Shift for slow motion
-- shadow: true
-  $name: Draw shadow
-- shadowStrength: 45
-  $name: Shadow strength (%)
-- animateHide: true
-  $name: Animate hidden windows
-- hookDefWindowProc: true
-  $name: Hook DefWindowProc
-- excludedPrograms: [vgc.exe, LeagueClient.exe, VALORANT.exe, EasyAntiCheat.exe, BEService.exe]
+  - macos: macOS (slow start, fast middle, soft landing)
+  - ease_in_out: Ease in-out (symmetrical)
+  - ease_out: Ease out (fast start, long settle)
+  - ease_in: Ease in (slow start, fast finish)
+  - linear: Linear
+- slow_motion_shift: true
+  $name: Shift slow-motion
+  $description: Hold Shift while minimizing or restoring to play the genie in slow motion (like macOS).
+- slow_motion_factor: 5
+  $name: Slow-motion factor
+  $description: How many times slower the animation plays while Shift is held. Clamped to 2-12.
+- open_animation: true
+  $name: Animate window restore (open)
+  $description: Play the reverse genie when a window is restored from the taskbar.
+- launch_animation: true
+  $name: Animate app launch
+  $description: Animate an application window when it first opens.
+- launch_style: pop
+  $name: Launch style
+  $description: Pop is the macOS look (scale up + fade in). Genie flows the window out of the taskbar.
+  $options:
+  - pop: Pop (scale + fade, like macOS)
+  - genie: Genie (from the taskbar)
+- close_animation: true
+  $name: Animate window close
+  $description: Animate a window when it closes.
+- close_style: pop
+  $name: Close style
+  $description: Pop is the macOS look (slight shrink + fade out). Genie flows the window to a screen edge.
+  $options:
+  - pop: Pop (scale + fade, like macOS)
+  - genie: Genie (to a screen edge)
+- close_direction: up
+  $name: Close genie direction
+  $description: Only used when the Close style is Genie. Where a closing window flows to on its own screen.
+  $options:
+  - up: Up (top center)
+  - down: Down (bottom center)
+  - left: Left (center)
+  - right: Right (center)
+- hide_as_close: false
+  $name: Animate apps that hide to the tray on close
+  $description: Some apps hide instead of closing. Treat that as a close animation.
+- pop_open_duration_ms: 240
+  $name: Pop open duration (ms)
+  $description: Duration of the launch pop. Clamped to 60-1500.
+- pop_close_duration_ms: 180
+  $name: Pop close duration (ms)
+  $description: Duration of the close pop. Clamped to 60-1500.
+- pop_scale: 92
+  $name: Pop start/end scale (%)
+  $description: Size the window starts from when opening and shrinks to when closing. Clamped to 50-100.
+- round_corners: true
+  $name: Round window corners (Windows 11)
+  $description: Bake Windows 11 style rounded corners into the animated snapshot so they warp with the window.
+- dock_depth_percent: 30
+  $name: Genie dock depth (%)
+  $description: How far the genie tip dives into the taskbar, as a percentage of the taskbar height. Clamped to 0-90.
+- multi_monitor: false
+  $name: Multi-monitor support (experimental)
+  $description: Target the taskbar on the window's current monitor instead of the primary.
+- unhide_taskbar: true
+  $name: Unhide taskbar (for taskbar auto-hide)
+  $description: Briefly reveal the taskbar during minimize if it is set to auto-hide.
+- unhide_duration_ms: 450
+  $name: Taskbar unhide duration (ms)
+  $description: How long to keep the taskbar revealed before minimizing.
+- engine: modern
+  $name: Genie engine
+  $description: Modern is the Direct2D mesh warp. Classic is the strip-based GDI warp.
+  $options:
+  - modern: Modern genie (Direct2D engine)
+  - classic: Classic genie (original)
+- tile_count: 35
+  $name: Genie tile count (modern engine)
+  $description: Mesh resolution of the modern genie (higher = smoother curve, more CPU).
+- excluded_programs: [""]
   $name: Excluded programs
+  $description: Programs whose windows should never animate (e.g. WindowsTerminal.exe).
 */
 // ==/WindhawkModSettings==
 
 #include <windows.h>
 #include <dwmapi.h>
+#include <d2d1.h>
+#include <math.h>
+#include <atomic>
+#include <unordered_map>
+#include <unordered_set>
+#include <mutex>
+#include <vector>
+#include <string>
+#include <algorithm>
+#include <cwctype>
 #include <uiautomation.h>
+#include <shellapi.h>
 #include <objbase.h>
 #include <oleauto.h>
+#include <propsys.h>
+#include <propidl.h>
 
-#include <algorithm>
-#include <cmath>
-#include <cstdint>
-#include <cstring>
-#include <cwctype>
-#include <string>
-#include <vector>
-
+// Fallback definitions for MinGW compatibility
+#ifndef DWMWA_EXTENDED_FRAME_BOUNDS
+#define DWMWA_EXTENDED_FRAME_BOUNDS 9
+#endif
+#ifndef DWMWA_CLOAK
+#define DWMWA_CLOAK 13
+#endif
+#ifndef DWMWA_CLOAKED
+#define DWMWA_CLOAKED 14
+#endif
+#ifndef DWMWA_TRANSITIONS_FORCEDISABLED
+#define DWMWA_TRANSITIONS_FORCEDISABLED 3
+#endif
 #ifndef PW_RENDERFULLCONTENT
 #define PW_RENDERFULLCONTENT 2
 #endif
-
-#ifndef SPI_GETCLIENTAREAANIMATION
-#define SPI_GETCLIENTAREAANIMATION 0x1042
+#ifndef CREATE_WAITABLE_TIMER_HIGH_RESOLUTION
+#define CREATE_WAITABLE_TIMER_HIGH_RESOLUTION 0x00000002
 #endif
-
 #ifndef PROCESS_QUERY_LIMITED_INFORMATION
 #define PROCESS_QUERY_LIMITED_INFORMATION 0x1000
 #endif
-
 #ifndef UIA_ButtonControlTypeId
 #define UIA_ButtonControlTypeId 50000
 #endif
-
 #ifndef UIA_ListItemControlTypeId
 #define UIA_ListItemControlTypeId 50007
 #endif
-
 #ifndef UIA_ControlTypePropertyId
 #define UIA_ControlTypePropertyId 30003
 #endif
-
 #ifndef TreeScope_Descendants
 #define TreeScope_Descendants 4
 #endif
-
-static const GUID CLSID_CUIAutomation8_Guid =
-    {0xe22ad333, 0xb25f, 0x460c, {0x83, 0xd0, 0x05, 0x81, 0x10, 0x73, 0x95, 0xc9}};
-static const GUID CLSID_CUIAutomation_Guid =
-    {0xff48dba4, 0x60ef, 0x4201, {0xaa, 0x87, 0x54, 0x10, 0x3e, 0xef, 0x59, 0x4e}};
-static const GUID IID_IUIAutomation_Guid =
-    {0x30cbe57d, 0xd9d0, 0x452a, {0xab, 0x13, 0x7a, 0xc5, 0xac, 0x48, 0x25, 0xee}};
-
-namespace {
-
-constexpr int kMaxLevels = 10;
-constexpr float kLodBias = 0.55f;
-constexpr float kSlideEnd = 0.50f;
-constexpr float kTravelStart = 0.38f;
-
-inline float Sat(float x) { return x < 0.f ? 0.f : (x > 1.f ? 1.f : x); }
-
-inline float SmoothStep(float x) {
-    x = Sat(x);
-    return x * x * (3.f - 2.f * x);
-}
-
-inline double EaseOutCubic(double t) {
-    const double u = 1.0 - t;
-    return 1.0 - u * u * u;
-}
-
-inline double EaseInOutSine(double t) {
-    return -(std::cos(3.14159265358979323846 * t) - 1.0) / 2.0;
-}
-
-inline float EaseInOutCubic(float x) {
-    return x < 0.5f ? 4.f * x * x * x : 1.f - 4.f * (1.f - x) * (1.f - x) * (1.f - x);
-}
-
-inline double EaseOutQuint(double t) {
-    const double u = 1.0 - t;
-    return 1.0 - u * u * u * u * u;
-}
-
-inline double EaseOutBack(double t) {
-    const double c1 = 1.70158;
-    const double c3 = c1 + 1.0;
-    const double u = t - 1.0;
-    return 1.0 + c3 * u * u * u + c1 * u * u;
-}
-
-inline double EaseInQuad(double t) { return t * t; }
-
-inline float EaseTravel(float x) {
-    x = Sat(x);
-    return x * x * (2.2f - 1.2f * x);
-}
-
-inline float Log2f(float x) { return std::log(x) / std::log(2.0f); }
-
-inline uint32_t Lerp8(uint32_t a, uint32_t b, uint32_t f) {
-    const uint32_t rb =
-        (((a & 0x00FF00FFu) * (256u - f) + (b & 0x00FF00FFu) * f) >> 8) & 0x00FF00FFu;
-    const uint32_t ag = ((((a >> 8) & 0x00FF00FFu) * (256u - f)) +
-                         (((b >> 8) & 0x00FF00FFu) * f)) &
-                        0xFF00FF00u;
-    return rb | ag;
-}
-
-inline uint32_t Mul8(uint32_t c, uint32_t a) {
-    const uint32_t rb = (((c & 0x00FF00FFu) * a) >> 8) & 0x00FF00FFu;
-    const uint32_t ag = (((c >> 8) & 0x00FF00FFu) * a) & 0xFF00FF00u;
-    return rb | ag;
-}
-
-inline uint32_t Avg4(uint32_t a, uint32_t b, uint32_t c, uint32_t d) {
-    const uint32_t rb = (((a & 0x00FF00FFu) + (b & 0x00FF00FFu) + (c & 0x00FF00FFu) +
-                          (d & 0x00FF00FFu) + 0x00020002u) >> 2) & 0x00FF00FFu;
-    const uint32_t ag = ((((a >> 8) & 0x00FF00FFu) + ((b >> 8) & 0x00FF00FFu) +
-                          ((c >> 8) & 0x00FF00FFu) + ((d >> 8) & 0x00FF00FFu) + 0x00020002u) >> 2) &
-                        0x00FF00FFu;
-    return rb | (ag << 8);
-}
-
-struct Pyramid {
-    int levels = 0;
-    int w[kMaxLevels] = {};
-    int h[kMaxLevels] = {};
-    const uint32_t* px[kMaxLevels] = {};
-    std::vector<uint32_t> store[kMaxLevels];
-
-    void Build(const uint32_t* base, int bw, int bh) {
-        levels = 1;
-        w[0] = bw;
-        h[0] = bh;
-        px[0] = base;
-
-        while (levels < kMaxLevels && w[levels - 1] >= 8 && h[levels - 1] >= 8) {
-            const int pw = w[levels - 1], ph = h[levels - 1];
-            const int nw = (pw + 1) / 2, nh = (ph + 1) / 2;
-            std::vector<uint32_t>& d = store[levels];
-            d.assign((size_t)nw * nh, 0u);
-            const uint32_t* s = px[levels - 1];
-
-            for (int y = 0; y < nh; y++) {
-                const uint32_t* r0 = s + (size_t)(2 * y) * pw;
-                const uint32_t* r1 = s + (size_t)std::min(2 * y + 1, ph - 1) * pw;
-                uint32_t* o = &d[(size_t)y * nw];
-
-                for (int x = 0; x < nw; x++) {
-                    const int x0 = 2 * x;
-                    const int x1 = std::min(2 * x + 1, pw - 1);
-                    o[x] = Avg4(r0[x0], r0[x1], r1[x0], r1[x1]);
-                }
-            }
-
-            w[levels] = nw;
-            h[levels] = nh;
-            px[levels] = d.data();
-            levels++;
-        }
-    }
-};
-
-struct RowMap {
-    float srcY = 0.f;
-    float xl = 0.f;
-    float xr = 0.f;
-    float cov = 0.f;
-};
-
-struct Scratch {
-    std::vector<uint32_t> vbuf[2];
-    std::vector<uint32_t> out2;
-    std::vector<uint32_t> prefix;
-
-    void Init(int srcW, int outW) {
-        vbuf[0].assign((size_t)srcW + 2, 0u);
-        vbuf[1].assign((size_t)srcW + 2, 0u);
-        prefix.assign(((size_t)srcW + 2) * 4, 0u);
-        out2.assign((size_t)outW + 2, 0u);
-    }
-};
-
-inline const uint32_t* VerticalLine(const Pyramid& py, int lv, float srcY0,
-                                    std::vector<uint32_t>& buf) {
-    const int w = py.w[lv], h = py.h[lv];
-    float v = (srcY0 + 0.5f) / (float)(1 << lv) - 0.5f;
-    v = v < 0.f ? 0.f : (v > (float)(h - 1) ? (float)(h - 1) : v);
-
-    const int y0 = (int)v;
-    const int y1 = std::min(y0 + 1, h - 1);
-    const uint32_t f = (uint32_t)((v - (float)y0) * 256.f);
-    const uint32_t* r0 = py.px[lv] + (size_t)y0 * w;
-
-    if (f == 0 || y1 == y0) return r0;
-
-    const uint32_t* r1 = py.px[lv] + (size_t)y1 * w;
-    for (int x = 0; x < w; x++) buf[x] = Lerp8(r0[x], r1[x], f);
-    return buf.data();
-}
-
-inline void PrefixAt(const uint32_t* P, int w, float t, float* o) {
-    const int i = (int)t;
-    if (i >= w) {
-        for (int c = 0; c < 4; c++) o[c] = (float)P[(size_t)w * 4 + c];
-        return;
-    }
-
-    const float fr = t - (float)i;
-    for (int c = 0; c < 4; c++) {
-        const float a = (float)P[(size_t)i * 4 + c];
-        const float b = (float)P[(size_t)(i + 1) * 4 + c];
-        o[c] = a + (b - a) * fr;
-    }
-}
-
-void HorizontalSpan(const uint32_t* line, int w, float xl, float xr, int xs, int xe,
-                    uint32_t* out, std::vector<uint32_t>& prefix) {
-    const float step = (float)w / (xr - xl);
-
-    if (step <= 1.25f) {
-        const float maxU = (float)(w - 1);
-        float u = ((float)xs + 0.5f - xl) * step - 0.5f;
-
-        for (int x = xs; x <= xe; x++, u += step) {
-            const float uc = u < 0.f ? 0.f : (u > maxU ? maxU : u);
-            const int ix = (int)uc;
-            const int ix1 = std::min(ix + 1, w - 1);
-            const uint32_t fx = (uint32_t)((uc - (float)ix) * 256.f);
-            out[x - xs] = Lerp8(line[ix], line[ix1], fx);
-        }
-        return;
-    }
-
-    uint32_t* P = prefix.data();
-    P[0] = P[1] = P[2] = P[3] = 0;
-
-    for (int i = 0; i < w; i++) {
-        const uint32_t c = line[i];
-        uint32_t* d = P + (size_t)(i + 1) * 4;
-        const uint32_t* s = P + (size_t)i * 4;
-        d[0] = s[0] + (c >> 24);
-        d[1] = s[1] + ((c >> 16) & 0xFF);
-        d[2] = s[2] + ((c >> 8) & 0xFF);
-        d[3] = s[3] + (c & 0xFF);
-    }
-
-    const float fw = (float)w;
-    float a = ((float)xs - xl) * step;
-
-    for (int x = xs; x <= xe; x++, a += step) {
-        float lo = a < 0.f ? 0.f : (a > fw ? fw : a);
-        float hi = a + step;
-        hi = hi < 0.f ? 0.f : (hi > fw ? fw : hi);
-
-        if (hi - lo < 1e-3f) {
-            hi = std::min(fw, lo + 1e-3f);
-            lo = hi - 1e-3f;
-        }
-
-        float s0[4], s1[4];
-        PrefixAt(P, w, lo, s0);
-        PrefixAt(P, w, hi, s1);
-
-        const float k = 1.f / (hi - lo);
-        uint32_t v[4];
-
-        for (int c = 0; c < 4; c++) {
-            const float f = (s1[c] - s0[c]) * k + 0.5f;
-            v[c] = (uint32_t)(f < 0.f ? 0.f : (f > 255.f ? 255.f : f));
-        }
-
-        v[1] = std::min(v[1], v[0]);
-        v[2] = std::min(v[2], v[0]);
-        v[3] = std::min(v[3], v[0]);
-        out[x - xs] = (v[0] << 24) | (v[1] << 16) | (v[2] << 8) | v[3];
-    }
-}
-
-bool RenderRowSpan(uint32_t* dstRow, int bw, const Pyramid& py, const RowMap& m, int lvA,
-                   int lvB, uint32_t lf, Scratch& sc, int* oxs, int* oxe) {
-    if (m.cov <= 0.f || m.xr - m.xl < 0.25f) return false;
-
-    const int xs = std::max(0, (int)std::floor(m.xl));
-    const int xe = std::min(bw - 1, (int)std::floor(m.xr - 0.001f));
-    if (xe < xs) return false;
-
-    const int n = xe - xs + 1;
-    const uint32_t* la = VerticalLine(py, lvA, m.srcY, sc.vbuf[0]);
-    HorizontalSpan(la, py.w[lvA], m.xl, m.xr, xs, xe, dstRow + xs, sc.prefix);
-
-    if (lvB != lvA && lf > 0) {
-        const uint32_t* lb = VerticalLine(py, lvB, m.srcY, sc.vbuf[1]);
-        HorizontalSpan(lb, py.w[lvB], m.xl, m.xr, xs, xe, sc.out2.data(), sc.prefix);
-        for (int i = 0; i < n; i++) dstRow[xs + i] = Lerp8(dstRow[xs + i], sc.out2[i], lf);
-    }
-
-    if (m.cov < 0.996f) {
-        const uint32_t a = (uint32_t)(m.cov * 256.f);
-        for (int i = 0; i < n; i++) dstRow[xs + i] = Mul8(dstRow[xs + i], a);
-    }
-
-    const float cl = Sat(std::min((float)xs + 1.f, m.xr) - std::max((float)xs, m.xl));
-    if (cl < 0.996f) dstRow[xs] = Mul8(dstRow[xs], (uint32_t)(cl * 256.f));
-
-    if (xe != xs) {
-        const float cr = Sat(std::min((float)xe + 1.f, m.xr) - std::max((float)xe, m.xl));
-        if (cr < 0.996f) dstRow[xe] = Mul8(dstRow[xe], (uint32_t)(cr * 256.f));
-    }
-
-    *oxs = xs;
-    *oxe = xe;
-    return true;
-}
-
-struct RowSpan {
-    int curL = 0, curR = -1;
-    int dirL = 0, dirR = -1;
-};
-
-struct FrameCtx {
-    const Pyramid* py = nullptr;
-    const RowMap* rows = nullptr;
-    RowSpan* spans = nullptr;
-    uint32_t* frame = nullptr;
-    int bw = 0, bh = 0;
-    int lvA = 0, lvB = 0;
-    uint32_t lf = 0;
-};
-
-void RenderRows(const FrameCtx& c, int y0, int y1, Scratch& sc) {
-    for (int y = y0; y < y1; y++) {
-        RowSpan& sp = c.spans[y];
-        uint32_t* row = c.frame + (size_t)y * c.bw;
-
-        const int oldL = sp.curL, oldR = sp.curR;
-        if (oldR >= oldL) memset(row + oldL, 0, (size_t)(oldR - oldL + 1) * 4);
-
-        int xs = 0, xe = -1;
-        if (RenderRowSpan(row, c.bw, *c.py, c.rows[y], c.lvA, c.lvB, c.lf, sc, &xs, &xe)) {
-            sp.curL = xs;
-            sp.curR = xe;
-        } else {
-            sp.curL = 0;
-            sp.curR = -1;
-        }
-
-        int dl = 0, dr = -1;
-        if (oldR >= oldL && sp.curR >= sp.curL) {
-            dl = std::min(oldL, sp.curL);
-            dr = std::max(oldR, sp.curR);
-        } else if (oldR >= oldL) {
-            dl = oldL;
-            dr = oldR;
-        } else if (sp.curR >= sp.curL) {
-            dl = sp.curL;
-            dr = sp.curR;
-        }
-
-        sp.dirL = dl;
-        sp.dirR = dr;
-    }
-}
-
-inline void PickLevels(const Pyramid& py, float minification, int* lvA, int* lvB, uint32_t* lf) {
-    float lod = minification > 1.f ? Log2f(minification) - kLodBias : 0.f;
-    const float maxL = (float)(py.levels - 1);
-    lod = lod < 0.f ? 0.f : (lod > maxL ? maxL : lod);
-
-    const int a = (int)lod;
-    const float fr = lod - (float)a;
-
-    *lvA = a;
-    if (a < py.levels - 1 && fr > 0.02f) {
-        *lvB = a + 1;
-        *lf = (uint32_t)(fr * 256.f);
-    } else {
-        *lvB = a;
-        *lf = 0;
-    }
-}
-
-float BuildAffine(std::vector<RowMap>& rows, int bh, float cx, float cy, float aw, float ah,
-                  float s) {
-    for (auto& r : rows) r.cov = 0.f;
-
-    const float w = aw * s, h = ah * s;
-    const float left = cx - w * 0.5f, top = cy - h * 0.5f;
-
-    for (int y = 0; y < bh; y++) {
-        const float t0 = std::max((float)y, top);
-        const float t1 = std::min((float)y + 1.f, top + h);
-        if (t1 <= t0) continue;
-
-        const float yc = (t0 + t1) * 0.5f;
-        rows[y] = RowMap{(yc - top) / s - 0.5f, left, left + w, std::min(1.f, t1 - t0)};
-    }
-
-    return 1.f / s;
-}
-
-struct GenieGeom {
-    float ax = 0, ay = 0, aw = 0, ah = 0;
-    float dxL = 0, dxR = 0;
-    float dockTop = 0, dockBot = 0;
-    bool flip = false;
-};
-
-inline float GenieCurve(float s) { return EaseInOutCubic(s); }
-
-float BuildGenie(std::vector<RowMap>& rows, int bh, const GenieGeom& g, float p) {
-    for (auto& r : rows) r.cov = 0.f;
-
-    const float sp = (float)EaseInOutSine(Sat(p / kSlideEnd));
-    const float tp = EaseTravel((p - kTravelStart) / (1.f - kTravelStart));
-
-    const float top0 = g.ay, bot0 = g.ay + g.ah;
-    const float travel = std::max(1.f, g.dockTop - top0);
-    const float yt = top0 + tp * travel;
-    const float yb = std::min(bot0 + tp * travel, std::max(g.dockBot, bot0));
-
-    if (yb - yt < 0.5f) return 1.f;
-
-    const float L0 = g.ax, R0 = g.ax + g.aw;
-    const float Lb = L0 + sp * (g.dxL - L0);
-    const float Rb = R0 + sp * (g.dxR - R0);
-
-    auto edgeX = [&](float y, float topX, float botX) {
-        if (y <= top0) return topX;
-        if (y >= g.dockTop) return botX;
-        return botX + GenieCurve((g.dockTop - y) / travel) * (topX - botX);
-    };
-
-    const float rowsPerPx = g.ah / (yb - yt);
-    const int y0 = std::max(0, (int)std::floor(yt));
-    const int y1 = std::min(bh - 1, (int)std::ceil(yb));
-
-    for (int y = y0; y <= y1; y++) {
-        const float c0 = std::max((float)y, yt);
-        const float c1 = std::min((float)y + 1.f, yb);
-        if (c1 <= c0) continue;
-
-        const float yc = 0.5f * (c0 + c1);
-        const float s = (yc - yt) * rowsPerPx;
-
-        RowMap m;
-        m.srcY = (g.flip ? g.ah - s : s) - 0.5f;
-        m.xl = edgeX(yc, L0, Lb);
-        m.xr = edgeX(yc, R0, Rb);
-        m.cov = Sat(c1 - c0);
-        rows[g.flip ? bh - 1 - y : y] = m;
-    }
-
-    return rowsPerPx;
-}
-
-void BoxBlurF(std::vector<float>& a, int w, int h, int r) {
-    if (r < 1) return;
-
-    std::vector<float> tmp(a.size());
-    const float inv = 1.f / (float)(2 * r + 1);
-
-    for (int y = 0; y < h; y++) {
-        const float* s = &a[(size_t)y * w];
-        float* d = &tmp[(size_t)y * w];
-        float sum = 0.f;
-
-        for (int x = -r; x <= r; x++) sum += (x >= 0 && x < w) ? s[x] : 0.f;
-
-        for (int x = 0; x < w; x++) {
-            d[x] = sum * inv;
-            const int add = x + r + 1, sub = x - r;
-            if (add < w) sum += s[add];
-            if (sub >= 0) sum -= s[sub];
-        }
-    }
-
-    for (int x = 0; x < w; x++) {
-        float sum = 0.f;
-        for (int y = -r; y <= r; y++) sum += (y >= 0 && y < h) ? tmp[(size_t)y * w + x] : 0.f;
-
-        for (int y = 0; y < h; y++) {
-            a[(size_t)y * w + x] = sum * inv;
-            const int add = y + r + 1, sub = y - r;
-            if (add < h) sum += tmp[(size_t)add * w + x];
-            if (sub >= 0) sum -= tmp[(size_t)sub * w + x];
-        }
-    }
-}
-
-void BuildShadow(uint32_t* art, int ow, int oh, int pad, int offY, int fw, int fh, int inset,
-                 float maxAlpha) {
-    constexpr int Q = 4;
-    const int lw = (ow + Q - 1) / Q + 2;
-    const int lh = (oh + Q - 1) / Q + 2;
-
-    std::vector<float> m((size_t)lw * lh, 0.f);
-    std::vector<float> cx(lw), cy(lh);
-
-    auto overlap = [](float a0, float a1, float b0, float b1) {
-        return std::max(0.f, std::min(a1, b1) - std::max(a0, b0));
-    };
-
-    for (int i = 0; i < lw; i++)
-        cx[i] = overlap((float)(i * Q), (float)(i * Q + Q), (float)pad, (float)(pad + fw)) / Q;
-
-    for (int j = 0; j < lh; j++)
-        cy[j] = overlap((float)(j * Q), (float)(j * Q + Q), (float)(pad + offY),
-                        (float)(pad + offY + fh)) / Q;
-
-    for (int j = 0; j < lh; j++)
-        for (int i = 0; i < lw; i++) m[(size_t)j * lw + i] = cx[i] * cy[j];
-
-    const int r = std::max(1, pad / (Q * 3));
-    for (int pass = 0; pass < 3; pass++) BoxBlurF(m, lw, lh, r);
-
-    std::vector<int> ix0(ow);
-    std::vector<float> fxv(ow);
-
-    for (int x = 0; x < ow; x++) {
-        float u = ((float)x + 0.5f) / Q - 0.5f;
-        u = u < 0.f ? 0.f : (u > (float)(lw - 2) ? (float)(lw - 2) : u);
-        ix0[x] = (int)u;
-        fxv[x] = u - (float)ix0[x];
-    }
-
-    const int ix = pad + inset, iy = pad + inset;
-    const int iw = fw - 2 * inset, ih = fh - 2 * inset;
-
-    for (int y = 0; y < oh; y++) {
-        float v = ((float)y + 0.5f) / Q - 0.5f;
-        v = v < 0.f ? 0.f : (v > (float)(lh - 2) ? (float)(lh - 2) : v);
-
-        const int j0 = (int)v;
-        const float fy = v - (float)j0;
-        const float* r0 = &m[(size_t)j0 * lw];
-        const float* r1 = r0 + lw;
-        const bool midRow = y >= iy && y < iy + ih;
-        uint32_t* d = art + (size_t)y * ow;
-
-        for (int x = 0; x < ow; x++) {
-            if (midRow && x >= ix && x < ix + iw) {
-                x = ix + iw - 1;
-                continue;
-            }
-
-            const int i0 = ix0[x];
-            const float fx = fxv[x];
-            const float a = (r0[i0] * (1.f - fx) + r0[i0 + 1] * fx) * (1.f - fy) +
-                            (r1[i0] * (1.f - fx) + r1[i0 + 1] * fx) * fy;
-
-            const float al = a * maxAlpha * 255.f + 0.5f;
-            d[x] = (uint32_t)(al > 255.f ? 255.f : al) << 24;
-        }
-    }
-}
-
-struct Api {
-    decltype(&::DwmGetWindowAttribute) DwmGetWindowAttribute = nullptr;
-    decltype(&::DwmSetWindowAttribute) DwmSetWindowAttribute = nullptr;
-    decltype(&::DwmFlush) DwmFlush = nullptr;
-    decltype(&::DwmGetCompositionTimingInfo) DwmGetCompositionTimingInfo = nullptr;
-    decltype(&::CreateDIBSection) CreateDIBSection = nullptr;
-    decltype(&::CreateCompatibleDC) CreateCompatibleDC = nullptr;
-    decltype(&::SelectObject) SelectObject = nullptr;
-    decltype(&::DeleteDC) DeleteDC = nullptr;
-    decltype(&::DeleteObject) DeleteObject = nullptr;
-
-    HANDLE(WINAPI* AvSetMmThreadCharacteristicsW)(LPCWSTR, LPDWORD) = nullptr;
-    BOOL(WINAPI* AvRevertMmThreadCharacteristics)(HANDLE) = nullptr;
-
-    HANDLE(WINAPI* SetThreadDpiAwarenessContext)(HANDLE) = nullptr;
-    UINT(WINAPI* GetDpiForWindow)(HWND) = nullptr;
-} g_api;
-
-bool LoadImports() {
-    HMODULE dwm = LoadLibraryW(L"dwmapi.dll");
-    HMODULE gdi = LoadLibraryW(L"gdi32.dll");
-    if (!dwm || !gdi) return false;
-
-#define WH_LOAD(field, mod, name) \
-    ((g_api.field = (decltype(g_api.field))GetProcAddress(mod, name)) != nullptr)
-
-    const bool ok = WH_LOAD(DwmGetWindowAttribute, dwm, "DwmGetWindowAttribute") &&
-                    WH_LOAD(DwmSetWindowAttribute, dwm, "DwmSetWindowAttribute") &&
-                    WH_LOAD(DwmFlush, dwm, "DwmFlush") &&
-                    WH_LOAD(CreateDIBSection, gdi, "CreateDIBSection") &&
-                    WH_LOAD(CreateCompatibleDC, gdi, "CreateCompatibleDC") &&
-                    WH_LOAD(SelectObject, gdi, "SelectObject") &&
-                    WH_LOAD(DeleteDC, gdi, "DeleteDC") &&
-                    WH_LOAD(DeleteObject, gdi, "DeleteObject");
-
-    if (!ok) return false;
-
-    (void)WH_LOAD(DwmGetCompositionTimingInfo, dwm, "DwmGetCompositionTimingInfo");
-
-    if (HMODULE av = LoadLibraryW(L"avrt.dll")) {
-        (void)WH_LOAD(AvSetMmThreadCharacteristicsW, av, "AvSetMmThreadCharacteristicsW");
-        (void)WH_LOAD(AvRevertMmThreadCharacteristics, av, "AvRevertMmThreadCharacteristics");
-    }
-
-    if (HMODULE u = GetModuleHandleW(L"user32.dll")) {
-        (void)WH_LOAD(SetThreadDpiAwarenessContext, u, "SetThreadDpiAwarenessContext");
-        (void)WH_LOAD(GetDpiForWindow, u, "GetDpiForWindow");
-    }
-
-#undef WH_LOAD
-    return true;
-}
-
-constexpr DWORD kDwmTransitionsForceDisabled = 3;
-constexpr DWORD kDwmExtendedFrameBounds = 9;
-constexpr DWORD kDwmCloak = 13;
-constexpr DWORD kDwmCloaked = 14;
-constexpr DWORD kDwmCornerPreference = 33;
-
-constexpr wchar_t kOverlayClass[] = L"WhMacAnimOverlay";
-
-enum class MinStyle { Off, Scale, Genie };
-
-struct {
-    bool closeOn = true;
-    int closeMs = 180;
-    double closeScale = 0.95;
-
-    bool openOn = false;
-    int openMs = 220;
-    double openScale = 0.92;
-
-    MinStyle minStyle = MinStyle::Genie;
-    int minMs = 450;
-    bool genieNearWindow = false;
-    bool shiftSlow = true;
-
-    bool shadow = true;
-    float shadowAlpha = 0.45f;
-    bool animateHide = true;
-    bool hookDefProc = true;
-
-    std::vector<std::wstring> excluded;
-} g_cfg;
-
-thread_local bool t_busy = false;
-
-SRWLOCK g_classLock = SRWLOCK_INIT;
-bool g_classRegistered = false;
-
-using DestroyWindow_t = decltype(&DestroyWindow);
+#ifndef UIA_NamePropertyId
+#define UIA_NamePropertyId 30005
+#endif
+#ifndef UIA_AutomationIdPropertyId
+#define UIA_AutomationIdPropertyId 30011
+#endif
+#ifndef UIA_BoundingRectanglePropertyId
+#define UIA_BoundingRectanglePropertyId 30001
+#endif
+#ifndef DWMWA_WINDOW_CORNER_PREFERENCE
+#define DWMWA_WINDOW_CORNER_PREFERENCE 33
+#endif
+
+// Explicit GUIDs to avoid __uuidof MinGW compile errors
+static const GUID CLSID_CUIAutomation8_Guid = {0xe22ad333, 0xb25f, 0x460c, {0x83, 0xd0, 0x05, 0x81, 0x10, 0x73, 0x95, 0xc9}};
+static const GUID CLSID_CUIAutomation_Guid = {0xff48dba4, 0x60ef, 0x4201, {0xaa, 0x87, 0x54, 0x10, 0x3e, 0xef, 0x59, 0x4e}};
+static const GUID IID_IUIAutomation_Guid = {0x30cbe57d, 0xd9d0, 0x452a, {0xab, 0x13, 0x7a, 0xc5, 0xac, 0x48, 0x25, 0xee}};
+static const GUID IID_ID2D1Factory_Guid = {0x06152247, 0x6f50, 0x465a, {0x92, 0x45, 0x11, 0x8b, 0xfd, 0x3b, 0x60, 0x07}};
+
+#define PI 3.14159265f
+#define TILE_COUNT_MIN 8
+#define TILE_COUNT_MAX 96
+#define TILE_COUNT_DEFAULT 35
+#define COMPAT_TASKBAR_HEIGHT 70
+#define COMPAT_ICON_SIZE      33
+#define MACGENIE_ASYNC_HIDE (WM_APP + 0x4A1)
+
+struct Geometry { float x, y, width, height; };
+
+typedef LRESULT (WINAPI *DefWindowProcW_t)(HWND hWnd, UINT Msg, WPARAM wParam, LPARAM lParam);
+DefWindowProcW_t DefWindowProcW_Original;
+
+typedef BOOL (WINAPI *DestroyWindow_t)(HWND hWnd);
 DestroyWindow_t DestroyWindow_Original;
 
-using ShowWindow_t = decltype(&ShowWindow);
+typedef BOOL (WINAPI *ShowWindow_t)(HWND hWnd, int nCmdShow);
 ShowWindow_t ShowWindow_Original;
 
-using DefProc_t = LRESULT(WINAPI*)(HWND, UINT, WPARAM, LPARAM);
-DefProc_t DefWindowProcW_Original;
-DefProc_t DefWindowProcA_Original;
+typedef BOOL (WINAPI *ShowWindowAsync_t)(HWND hWnd, int nCmdShow);
+ShowWindowAsync_t ShowWindowAsync_Original;
 
-struct Surface {
-    HDC dc = nullptr;
-    HBITMAP bmp = nullptr;
-    HGDIOBJ old = nullptr;
-    void* bits = nullptr;
+typedef BOOL (WINAPI *SetWindowPlacement_t)(HWND hWnd, const WINDOWPLACEMENT* lpwndpl);
+SetWindowPlacement_t SetWindowPlacement_Original;
 
-    Surface() = default;
-    Surface(const Surface&) = delete;
-    Surface& operator=(const Surface&) = delete;
+typedef BOOL (WINAPI *CloseWindow_t)(HWND hWnd);
+CloseWindow_t CloseWindow_Original;
 
-    bool Create(HDC ref, int w, int h) {
-        BITMAPINFO bi = {};
-        bi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
-        bi.bmiHeader.biWidth = w;
-        bi.bmiHeader.biHeight = -h;
-        bi.bmiHeader.biPlanes = 1;
-        bi.bmiHeader.biBitCount = 32;
-        bi.bmiHeader.biCompression = BI_RGB;
+typedef BOOL (WINAPI *SetWindowPos_t)(HWND hWnd, HWND hWndInsertAfter, int X, int Y,
+                                      int cx, int cy, UINT uFlags);
+SetWindowPos_t SetWindowPos_Original;
 
-        bmp = g_api.CreateDIBSection(ref, &bi, DIB_RGB_COLORS, &bits, nullptr, 0);
-        if (!bmp) return false;
+ID2D1Factory* g_d2dFactory = nullptr;
 
-        dc = g_api.CreateCompatibleDC(ref);
-        if (!dc) return false;
+struct MacGenieAnimData {
+    HWND hRealWnd;
+    HBITMAP hBitmap;
+    void* pBits;
+    RECT targetRect;
+    HMONITOR hMon;
+    int width;
+    int height;
+    int targetDockX;
+    BOOL isRising;
+    LONG_PTR originalExStyle;
+    BOOL hiddenByCloak;
+    HANDLE hFirstFrameShown;
+    int durationMs;
+    BOOL requestedUnhide;
+    HWND hNextApp;
+    int  unhideDurationMs;
+    BOOL deferredMinimize;
+    BOOL isClosing;
+    UINT closeMsg;
+    int  style;          // 0 = genie (mesh warp), 1 = pop (scale + fade)
+    float popScale;      // pop style: start/end scale (0.5 - 1.0)
+};
 
-        old = g_api.SelectObject(dc, bmp);
-        return true;
-    }
+struct MacGenieLaunchData {
+    HWND     hWnd;
+    LONG_PTR originalExStyle;
+    BOOL     hiddenByCloak;
+};
 
-    void Free() {
-        if (dc) {
-            if (old) g_api.SelectObject(dc, old);
-            g_api.DeleteDC(dc);
+struct SnapCache { HBITMAP hBmp; void* pBits; int w; int h; };
+
+std::unordered_map<HWND, SnapCache> g_SnapshotCache;
+std::unordered_map<HWND, int> g_IconPositions;
+std::unordered_map<std::wstring, int> g_ProcessIconPositions;
+std::unordered_set<HWND> g_LaunchSeen;
+std::unordered_set<HWND> g_AnimActive;
+std::mutex g_CacheMutex;
+
+std::atomic<int> g_durationMs{450};
+std::atomic<bool> g_openAnimation{true};
+std::atomic<bool> g_launchAnimation{true};
+std::atomic<bool> g_multiMonitor{false};
+std::atomic<int>  g_unhideDurationMs{450};
+std::atomic<bool> g_unhideEnabled{true};
+std::atomic<bool> g_classicEngine{false};
+std::atomic<int> g_tileCount{TILE_COUNT_DEFAULT};
+std::atomic<bool> g_closeAnimation{true};
+std::atomic<bool> g_hideAsClose{false};
+std::atomic<int>  g_closeDirection{2};
+std::atomic<int>  g_easeMinimize{0};      // index into kMacGenieEasings
+std::atomic<int>  g_easeRestore{0};
+std::atomic<bool> g_slowMoShift{true};
+std::atomic<int>  g_slowMoFactor{5};
+std::atomic<int>  g_launchStyle{1};       // 0 = genie, 1 = pop
+std::atomic<int>  g_closeStyle{1};        // 0 = genie, 1 = pop
+std::atomic<int>  g_popOpenMs{240};
+std::atomic<int>  g_popCloseMs{180};
+std::atomic<int>  g_popScalePct{92};
+std::atomic<bool> g_roundCorners{true};
+std::atomic<int>  g_dockDepthPct{30};
+std::vector<std::wstring> g_ExcludedPrograms;
+
+std::atomic<bool> g_unloading{false};
+std::mutex g_WorkerThreadsMutex;
+std::vector<HANDLE> g_WorkerThreads;
+
+static bool MacGenieSpawnWorker(LPTHREAD_START_ROUTINE proc, void* param) {
+    std::lock_guard<std::mutex> lock(g_WorkerThreadsMutex);
+    if (g_unloading.load(std::memory_order_relaxed)) return false;
+    for (size_t i = g_WorkerThreads.size(); i-- > 0;) {
+        if (WaitForSingleObject(g_WorkerThreads[i], 0) == WAIT_OBJECT_0) {
+            CloseHandle(g_WorkerThreads[i]);
+            g_WorkerThreads.erase(g_WorkerThreads.begin() + i);
         }
-
-        if (bmp) g_api.DeleteObject(bmp);
-
-        dc = nullptr;
-        bmp = nullptr;
-        old = nullptr;
-        bits = nullptr;
     }
+    HANDLE hThread = CreateThread(NULL, 0, proc, param, 0, NULL);
+    if (!hThread) return false;
+    g_WorkerThreads.push_back(hThread);
+    return true;
+}
 
-    ~Surface() { Free(); }
+// Cubic-bezier easing presets: x1, y1, x2, y2 (CSS-style control points).
+struct MacGenieBezier { float x1, y1, x2, y2; };
+static const MacGenieBezier kMacGenieEasings[] = {
+    { 0.40f, 0.00f, 0.15f, 1.00f },   // 0 macos        - slow start, fast middle, soft landing
+    { 0.65f, 0.00f, 0.35f, 1.00f },   // 1 ease_in_out
+    { 0.22f, 1.00f, 0.36f, 1.00f },   // 2 ease_out
+    { 0.64f, 0.00f, 0.78f, 0.00f },   // 3 ease_in
+    { 0.00f, 0.00f, 1.00f, 1.00f },   // 4 linear
 };
 
-void LowerString(std::wstring& s) {
-    for (wchar_t& c : s) c = (wchar_t)std::towlower(c);
+static int MacGenieParseEasing(PCWSTR v) {
+    if (!wcscmp(v, L"ease_in_out")) return 1;
+    if (!wcscmp(v, L"ease_out")) return 2;
+    if (!wcscmp(v, L"ease_in")) return 3;
+    if (!wcscmp(v, L"linear")) return 4;
+    return 0;
 }
 
-bool EnsureOverlayClass() {
-    bool ok = true;
-    AcquireSRWLockExclusive(&g_classLock);
+// Evaluate y(x) of a CSS cubic-bezier (Newton-Raphson with a bisection fallback).
+static float MacGenieEase(int preset, float x) {
+    if (x <= 0.0f) return 0.0f;
+    if (x >= 1.0f) return 1.0f;
+    if (preset < 0 || preset > 4) preset = 0;
+    const MacGenieBezier& b = kMacGenieEasings[preset];
+    const float cx = 3.0f * b.x1, bx = 3.0f * (b.x2 - b.x1) - cx, ax = 1.0f - cx - bx;
+    const float cy = 3.0f * b.y1, by = 3.0f * (b.y2 - b.y1) - cy, ay = 1.0f - cy - by;
+    float t = x;
+    for (int i = 0; i < 8; ++i) {
+        float err = ((ax * t + bx) * t + cx) * t - x;
+        if (fabsf(err) < 1e-5f) return ((ay * t + by) * t + cy) * t;
+        float d = (3.0f * ax * t + 2.0f * bx) * t + cx;
+        if (fabsf(d) < 1e-6f) break;
+        t -= err / d;
+    }
+    float lo = 0.0f, hi = 1.0f;
+    t = x;
+    for (int i = 0; i < 24; ++i) {
+        float v = ((ax * t + bx) * t + cx) * t;
+        if (fabsf(v - x) < 1e-5f) break;
+        if (v < x) lo = t; else hi = t;
+        t = (lo + hi) * 0.5f;
+    }
+    return ((ay * t + by) * t + cy) * t;
+}
 
-    if (!g_classRegistered) {
-        WNDCLASSW wc = {};
-        wc.lpfnWndProc = DefWindowProcW;
-        wc.hInstance = GetModuleHandleW(nullptr);
-        wc.lpszClassName = kOverlayClass;
+void MacGenieLoadSettings() {
+    int ms = Wh_GetIntSetting(L"duration_ms");
+    if (ms < 50) ms = 50;
+    if (ms > 2000) ms = 2000;
+    g_durationMs.store(ms, std::memory_order_relaxed);
+    g_openAnimation.store(Wh_GetIntSetting(L"open_animation") != 0, std::memory_order_relaxed);
+    g_launchAnimation.store(Wh_GetIntSetting(L"launch_animation") != 0, std::memory_order_relaxed);
+    g_multiMonitor.store(Wh_GetIntSetting(L"multi_monitor") != 0, std::memory_order_relaxed);
 
-        ok = RegisterClassW(&wc) != 0 || GetLastError() == ERROR_CLASS_ALREADY_EXISTS;
-        g_classRegistered = ok;
+    int unhide_ms = Wh_GetIntSetting(L"unhide_duration_ms");
+    if (unhide_ms < 0) unhide_ms = 0;
+    if (unhide_ms > 5000) unhide_ms = 5000;
+    g_unhideDurationMs.store(unhide_ms, std::memory_order_relaxed);
+    g_unhideEnabled.store(Wh_GetIntSetting(L"unhide_taskbar") != 0, std::memory_order_relaxed);
+
+    PCWSTR engine = Wh_GetStringSetting(L"engine");
+    g_classicEngine.store(wcscmp(engine, L"classic") == 0, std::memory_order_relaxed);
+    Wh_FreeStringSetting(engine);
+
+    int tiles = Wh_GetIntSetting(L"tile_count");
+    if (tiles < TILE_COUNT_MIN) tiles = TILE_COUNT_MIN;
+    if (tiles > TILE_COUNT_MAX) tiles = TILE_COUNT_MAX;
+    g_tileCount.store(tiles, std::memory_order_relaxed);
+
+    g_closeAnimation.store(Wh_GetIntSetting(L"close_animation") != 0, std::memory_order_relaxed);
+    g_hideAsClose.store(Wh_GetIntSetting(L"hide_as_close") != 0, std::memory_order_relaxed);
+    PCWSTR direction = Wh_GetStringSetting(L"close_direction");
+    g_closeDirection.store(wcscmp(direction, L"left") == 0  ? 0 :
+                           wcscmp(direction, L"right") == 0 ? 1 :
+                           wcscmp(direction, L"down") == 0  ? 3 : 2,
+                           std::memory_order_relaxed);
+    Wh_FreeStringSetting(direction);
+
+    PCWSTR easeMin = Wh_GetStringSetting(L"minimize_easing");
+    g_easeMinimize.store(MacGenieParseEasing(easeMin), std::memory_order_relaxed);
+    Wh_FreeStringSetting(easeMin);
+    PCWSTR easeRes = Wh_GetStringSetting(L"restore_easing");
+    g_easeRestore.store(MacGenieParseEasing(easeRes), std::memory_order_relaxed);
+    Wh_FreeStringSetting(easeRes);
+
+    g_slowMoShift.store(Wh_GetIntSetting(L"slow_motion_shift") != 0, std::memory_order_relaxed);
+    int slowFactor = Wh_GetIntSetting(L"slow_motion_factor");
+    if (slowFactor < 2) slowFactor = 2;
+    if (slowFactor > 12) slowFactor = 12;
+    g_slowMoFactor.store(slowFactor, std::memory_order_relaxed);
+
+    PCWSTR launchStyle = Wh_GetStringSetting(L"launch_style");
+    g_launchStyle.store(wcscmp(launchStyle, L"genie") == 0 ? 0 : 1, std::memory_order_relaxed);
+    Wh_FreeStringSetting(launchStyle);
+    PCWSTR closeStyle = Wh_GetStringSetting(L"close_style");
+    g_closeStyle.store(wcscmp(closeStyle, L"genie") == 0 ? 0 : 1, std::memory_order_relaxed);
+    Wh_FreeStringSetting(closeStyle);
+
+    int popOpen = Wh_GetIntSetting(L"pop_open_duration_ms");
+    if (popOpen < 60) popOpen = 60;
+    if (popOpen > 1500) popOpen = 1500;
+    g_popOpenMs.store(popOpen, std::memory_order_relaxed);
+    int popClose = Wh_GetIntSetting(L"pop_close_duration_ms");
+    if (popClose < 60) popClose = 60;
+    if (popClose > 1500) popClose = 1500;
+    g_popCloseMs.store(popClose, std::memory_order_relaxed);
+    int popScale = Wh_GetIntSetting(L"pop_scale");
+    if (popScale < 50) popScale = 50;
+    if (popScale > 100) popScale = 100;
+    g_popScalePct.store(popScale, std::memory_order_relaxed);
+
+    g_roundCorners.store(Wh_GetIntSetting(L"round_corners") != 0, std::memory_order_relaxed);
+    int depth = Wh_GetIntSetting(L"dock_depth_percent");
+    if (depth < 0) depth = 0;
+    if (depth > 90) depth = 90;
+    g_dockDepthPct.store(depth, std::memory_order_relaxed);
+
+    std::vector<std::wstring> excluded;
+    for (int i = 0;; i++) {
+        PCWSTR prog = Wh_GetStringSetting(L"excluded_programs[%d]", i);
+        bool has = *prog;
+        if (has) {
+            std::wstring s = prog;
+            std::transform(s.begin(), s.end(), s.begin(), ::towlower);
+            excluded.push_back(std::move(s));
+        }
+        Wh_FreeStringSetting(prog);
+        if (!has) break;
+    }
+    {
+        std::lock_guard<std::mutex> lock(g_CacheMutex);
+        g_ExcludedPrograms.swap(excluded);
+    }
+}
+
+bool MacGenieIsExcluded(HWND hWnd) {
+    {
+        std::lock_guard<std::mutex> lock(g_CacheMutex);
+        if (g_ExcludedPrograms.empty()) return false;
+    }
+    DWORD pid = 0;
+    GetWindowThreadProcessId(hWnd, &pid);
+    if (!pid) return false;
+    HANDLE hProc = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+    if (!hProc) return false;
+    WCHAR path[MAX_PATH];
+    DWORD len = MAX_PATH;
+    bool ok = QueryFullProcessImageNameW(hProc, 0, path, &len) != 0;
+    CloseHandle(hProc);
+    if (!ok) return false;
+
+    std::wstring full = path;
+    std::transform(full.begin(), full.end(), full.begin(), ::towlower);
+    size_t slash = full.find_last_of(L"\\/");
+    std::wstring base = (slash == std::wstring::npos) ? full : full.substr(slash + 1);
+    std::wstring baseNoExt = base;
+    if (baseNoExt.size() > 4 && baseNoExt.compare(baseNoExt.size() - 4, 4, L".exe") == 0) {
+        baseNoExt.resize(baseNoExt.size() - 4);
     }
 
-    ReleaseSRWLockExclusive(&g_classLock);
-    return ok;
-}
-
-bool IsCloaked(HWND hwnd) {
-    DWORD cloaked = 0;
-    return SUCCEEDED(g_api.DwmGetWindowAttribute(hwnd, kDwmCloaked, &cloaked, sizeof(cloaked))) &&
-           cloaked;
-}
-
-bool BaseEligible(HWND hwnd) {
-    if (t_busy || !hwnd || !IsWindow(hwnd)) return false;
-    if (GetWindowThreadProcessId(hwnd, nullptr) != GetCurrentThreadId()) return false;
-
-    const LONG_PTR style = GetWindowLongPtrW(hwnd, GWL_STYLE);
-    const LONG_PTR ex = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
-
-    if (style & WS_CHILD) return false;
-    if (ex & (WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE)) return false;
-    if (((style & WS_CAPTION) != WS_CAPTION) && !(style & WS_THICKFRAME)) return false;
-    if (GetAncestor(hwnd, GA_PARENT) != GetDesktopWindow()) return false;
-
-    BOOL anim = TRUE;
-    SystemParametersInfoW(SPI_GETCLIENTAREAANIMATION, 0, &anim, 0);
-    if (!anim || GetSystemMetrics(SM_REMOTESESSION)) return false;
-
-    WCHAR cls[64] = {};
-    GetClassNameW(hwnd, cls, 64);
-
-    static const wchar_t* const kSkip[] = {
-        L"#32768", L"tooltips_class32", L"Shell_TrayWnd", L"Shell_SecondaryTrayWnd",
-        L"Progman", L"WorkerW", L"NotifyIconOverflowWindow", L"ForegroundStaging",
-        L"Windows.UI.Core.CoreWindow", L"XamlExplorerHostIslandWindow",
-        L"TopLevelWindowForOverflowXamlIsland", L"Xaml_WindowedPopupClass",
-        L"MultitaskingViewFrame", L"TaskListThumbnailWnd", L"TaskListOverlayWnd",
-        kOverlayClass};
-
-    for (const wchar_t* s : kSkip)
-        if (wcscmp(cls, s) == 0) return false;
-
-    return true;
-}
-
-bool ShouldAnimateVisible(HWND hwnd) {
-    return BaseEligible(hwnd) && IsWindowVisible(hwnd) && !IsIconic(hwnd) && !IsCloaked(hwnd);
-}
-
-bool ShouldAnimateOpen(HWND hwnd) {
-    return BaseEligible(hwnd) && !IsWindowVisible(hwnd) && !IsIconic(hwnd) && !IsCloaked(hwnd);
-}
-
-bool CanMinimize(HWND hwnd) {
-    return (GetWindowLongPtrW(hwnd, GWL_STYLE) & WS_MINIMIZEBOX) != 0;
-}
-
-bool CaptureFailed(const uint32_t* px, int stride, int w, int h) {
-    if (!px || w < 8 || h < 8) return true;
-
-    for (int sy = 1; sy < 12; sy++)
-        for (int sx = 1; sx < 12; sx++)
-            if ((px[(size_t)(h * sy / 12) * stride + (w * sx / 12)] & 0x00FFFFFFu) != 0)
-                return false;
-
-    return true;
-}
-
-bool LooksBlank(const uint32_t* px, int stride, int w, int h) {
-    if (CaptureFailed(px, stride, w, h)) return true;
-
-    const uint32_t first = px[0] & 0x00FCFCFCu;
-    for (int sy = 1; sy < 16; sy++)
-        for (int sx = 1; sx < 16; sx++)
-            if ((px[(size_t)(h * sy / 16) * stride + (w * sx / 16)] & 0x00FCFCFCu) != first)
-                return false;
-
-    return true;
-}
-
-bool IsFrontmostIn(HWND hwnd, const RECT& r) {
-    for (HWND w = GetWindow(hwnd, GW_HWNDPREV); w; w = GetWindow(w, GW_HWNDPREV)) {
-        if (!IsWindowVisible(w) || IsIconic(w)) continue;
-        if (GetWindowLongPtrW(w, GWL_EXSTYLE) & (WS_EX_TOPMOST | WS_EX_TRANSPARENT)) continue;
-        if (IsCloaked(w)) continue;
-
-        RECT wr, ir;
-        if (GetWindowRect(w, &wr) && IntersectRect(&ir, &wr, &r)) return false;
+    std::lock_guard<std::mutex> lock(g_CacheMutex);
+    for (const std::wstring& e : g_ExcludedPrograms) {
+        if (e == full || e == base || e == baseNoExt) return true;
     }
-
-    return true;
-}
-
-enum class Edge { Bottom, Top, Left, Right };
-
-struct Dock {
-    POINT pt = {};
-    Edge edge = Edge::Bottom;
-    int half = 22;
-};
-
-HWND FindTaskbarHwndForMonitor(HMONITOR mon) {
-    HWND h = FindWindowW(L"Shell_TrayWnd", nullptr);
-    if (h) {
-        RECT r;
-        if (GetWindowRect(h, &r) && MonitorFromRect(&r, MONITOR_DEFAULTTONEAREST) == mon)
-            return h;
-    }
-
-    HWND s = nullptr;
-    while ((s = FindWindowExW(nullptr, s, L"Shell_SecondaryTrayWnd", nullptr)) != nullptr) {
-        RECT r;
-        if (GetWindowRect(s, &r) && MonitorFromRect(&r, MONITOR_DEFAULTTONEAREST) == mon)
-            return s;
-    }
-
-    return nullptr;
-}
-
-bool FindTaskbarRect(HMONITOR mon, RECT* out) {
-    HWND h = FindTaskbarHwndForMonitor(mon);
-    if (h && GetWindowRect(h, out)) return true;
     return false;
 }
 
-std::wstring GetProcessBaseLower(HWND hwnd) {
-    DWORD pid = 0;
-    GetWindowThreadProcessId(hwnd, &pid);
-    if (!pid) return L"";
-
-    HANDLE hProc = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
-    if (!hProc) return L"";
-
-    WCHAR path[MAX_PATH] = {};
-    DWORD len = MAX_PATH;
-    std::wstring name;
-
-    if (QueryFullProcessImageNameW(hProc, 0, path, &len)) {
-        name = path;
-
-        size_t slash = name.find_last_of(L'\\');
-        if (slash == std::wstring::npos) slash = name.find_last_of(L'/');
-        if (slash != std::wstring::npos) name = name.substr(slash + 1);
-
-        size_t dot = name.find_last_of(L'.');
-        if (dot != std::wstring::npos && dot > 0) name = name.substr(0, dot);
-    }
-
-    CloseHandle(hProc);
-    LowerString(name);
-    return name;
+void MacGenieSetDwmTransitions(HWND hWnd, BOOL enable) {
+    BOOL disable = !enable;
+    DwmSetWindowAttribute(hWnd, DWMWA_TRANSITIONS_FORCEDISABLED, &disable, sizeof(disable));
 }
 
-bool GetTaskbarButtonRect(HWND hwndApp, HWND hTray, RECT* outRect) {
-    if (!hwndApp || !hTray || !outRect) return false;
-
-    HRESULT hr = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
-    bool coInit = (hr == S_OK || hr == S_FALSE);
-    bool found = false;
-
-    if (hr == S_OK || hr == S_FALSE || hr == RPC_E_CHANGED_MODE) {
-        IUIAutomation* pAutomation = nullptr;
-
-        HRESULT hrUia = CoCreateInstance(CLSID_CUIAutomation8_Guid, nullptr,
-                                         CLSCTX_INPROC_SERVER, IID_IUIAutomation_Guid,
-                                         (void**)&pAutomation);
-
-        if (FAILED(hrUia)) {
-            hrUia = CoCreateInstance(CLSID_CUIAutomation_Guid, nullptr,
-                                     CLSCTX_INPROC_SERVER, IID_IUIAutomation_Guid,
-                                     (void**)&pAutomation);
-        }
-
-        if (SUCCEEDED(hrUia) && pAutomation) {
-            IUIAutomationElement* pTrayElement = nullptr;
-
-            if (SUCCEEDED(pAutomation->ElementFromHandle(hTray, &pTrayElement)) && pTrayElement) {
-                WCHAR titleW[512] = {};
-                GetWindowTextW(hwndApp, titleW, 512);
-
-                std::wstring titleLower = titleW;
-                LowerString(titleLower);
-
-                std::wstring procLower = GetProcessBaseLower(hwndApp);
-                std::wstring hintLower = procLower;
-
-                if (procLower == L"chrome") hintLower = L"google chrome";
-                else if (procLower == L"msedge") hintLower = L"microsoft edge";
-                else if (procLower == L"firefox") hintLower = L"firefox";
-                else if (procLower == L"brave") hintLower = L"brave";
-                else if (procLower == L"opera") hintLower = L"opera";
-                else if (procLower == L"vivaldi") hintLower = L"vivaldi";
-
-                IUIAutomationCondition* pButtonCond = nullptr;
-                IUIAutomationCondition* pListItemCond = nullptr;
-                IUIAutomationCondition* pOrCond = nullptr;
-
-                VARIANT v;
-                VariantInit(&v);
-                v.vt = VT_I4;
-
-                v.lVal = (int)UIA_ButtonControlTypeId;
-                pAutomation->CreatePropertyCondition((PROPERTYID)UIA_ControlTypePropertyId, v,
-                                                     &pButtonCond);
-
-                v.lVal = (int)UIA_ListItemControlTypeId;
-                pAutomation->CreatePropertyCondition((PROPERTYID)UIA_ControlTypePropertyId, v,
-                                                     &pListItemCond);
-
-                if (pButtonCond && pListItemCond)
-                    pAutomation->CreateOrCondition(pButtonCond, pListItemCond, &pOrCond);
-
-                IUIAutomationElementArray* pArray = nullptr;
-                if (pOrCond && SUCCEEDED(pTrayElement->FindAll((TreeScope)TreeScope_Descendants,
-                                                               pOrCond, &pArray)) &&
-                    pArray) {
-                    int length = 0;
-                    pArray->get_Length(&length);
-
-                    int bestScore = 0;
-                    IUIAutomationElement* bestItem = nullptr;
-
-                    for (int i = 0; i < length; i++) {
-                        IUIAutomationElement* pItem = nullptr;
-                        if (SUCCEEDED(pArray->GetElement(i, &pItem)) && pItem) {
-                            BSTR name = nullptr;
-                            if (SUCCEEDED(pItem->get_CurrentName(&name)) && name) {
-                                std::wstring uiaNameLower = name;
-                                LowerString(uiaNameLower);
-
-                                if (!uiaNameLower.empty()) {
-                                    int score = 0;
-
-                                    if (!titleLower.empty()) {
-                                        if (titleLower == uiaNameLower) score += 1200;
-                                        if (titleLower.find(uiaNameLower) != std::wstring::npos)
-                                            score += 600;
-                                        if (uiaNameLower.find(titleLower) != std::wstring::npos)
-                                            score += 600;
-                                    }
-
-                                    if (!procLower.empty()) {
-                                        if (uiaNameLower == procLower) score += 900;
-                                        if (uiaNameLower.find(procLower) != std::wstring::npos)
-                                            score += 450;
-                                    }
-
-                                    if (!hintLower.empty() && hintLower != procLower &&
-                                        uiaNameLower.find(hintLower) != std::wstring::npos) {
-                                        score += 450;
-                                    }
-
-                                    if (score > bestScore) {
-                                        if (bestItem) bestItem->Release();
-                                        bestItem = pItem;
-                                        bestItem->AddRef();
-                                        bestScore = score;
-                                    }
-                                }
-
-                                SysFreeString(name);
-                            }
-
-                            pItem->Release();
-                        }
-                    }
-
-                    if (bestItem && bestScore >= 400) {
-                        RECT r = {};
-                        if (SUCCEEDED(bestItem->get_CurrentBoundingRectangle(&r)) &&
-                            r.right > r.left && r.bottom > r.top) {
-                            *outRect = r;
-                            found = true;
-                        }
-                    }
-
-                    if (bestItem) bestItem->Release();
-                    pArray->Release();
-                }
-
-                if (pOrCond) pOrCond->Release();
-                if (pListItemCond) pListItemCond->Release();
-                if (pButtonCond) pButtonCond->Release();
-                pTrayElement->Release();
-            }
-
-            pAutomation->Release();
-        }
-    }
-
-    if (coInit) CoUninitialize();
-    return found;
+void MacGenieSetCloak(HWND hWnd, BOOL cloak) {
+    DwmSetWindowAttribute(hWnd, DWMWA_CLOAK, &cloak, sizeof(cloak));
 }
 
-Dock ComputeDock(HWND hwnd, const RECT& fr, UINT dpi) {
-    Dock d;
-    d.half = MulDiv(22, dpi, 96);
-
-    HMONITOR mon = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
-
-    MONITORINFO mi = {};
-    mi.cbSize = sizeof(mi);
-    GetMonitorInfoW(mon, &mi);
-
-    HWND hTray = FindTaskbarHwndForMonitor(mon);
-    RECT tb = {};
-    bool hasTaskbar = hTray && GetWindowRect(hTray, &tb);
-
-    if (!hasTaskbar) {
-        tb = {mi.rcMonitor.left, mi.rcMonitor.bottom - MulDiv(48, dpi, 96), mi.rcMonitor.right,
-              mi.rcMonitor.bottom};
-    }
-
-    const int tbw = tb.right - tb.left;
-    const int tbh = tb.bottom - tb.top;
-    const int mcx = (mi.rcMonitor.left + mi.rcMonitor.right) / 2;
-    const int mcy = (mi.rcMonitor.top + mi.rcMonitor.bottom) / 2;
-    const int winCx = (fr.left + fr.right) / 2;
-    const int winCy = (fr.top + fr.bottom) / 2;
-
-    if (tbw >= tbh) {
-        d.edge = ((tb.top + tb.bottom) / 2 >= mcy) ? Edge::Bottom : Edge::Top;
-
-        LONG x = (tb.left + tb.right) / 2;
-        RECT btn = {};
-
-        if (hasTaskbar && GetTaskbarButtonRect(hwnd, hTray, &btn)) {
-            x = (btn.left + btn.right) / 2;
-
-            int btnHalf = (int)((btn.right - btn.left) / 2);
-            int minHalf = MulDiv(8, dpi, 96);
-            int maxHalf = MulDiv(32, dpi, 96);
-            if (maxHalf < minHalf) maxHalf = minHalf;
-
-            d.half = std::clamp(btnHalf, minHalf, maxHalf);
-        } else if (g_cfg.genieNearWindow) {
-            x = (LONG)winCx;
-        }
-
-        LONG lo = tb.left + d.half;
-        LONG hi = tb.right - d.half;
-
-        if (hi < lo) {
-            x = (tb.left + tb.right) / 2;
-        } else {
-            x = std::clamp(x, lo, hi);
-        }
-
-        d.pt.x = (int)x;
-        d.pt.y = (int)((tb.top + tb.bottom) / 2);
+static void MacGenieUndoRisingHide(HWND hWnd, LONG_PTR originalExStyle, BOOL cloakHidden) {
+    if (cloakHidden) {
+        MacGenieSetCloak(hWnd, FALSE);
     } else {
-        d.edge = ((tb.left + tb.right) / 2 >= mcx) ? Edge::Right : Edge::Left;
-
-        LONG y = (tb.top + tb.bottom) / 2;
-        RECT btn = {};
-
-        if (hasTaskbar && GetTaskbarButtonRect(hwnd, hTray, &btn)) {
-            y = (btn.top + btn.bottom) / 2;
-
-            int btnHalf = (int)((btn.bottom - btn.top) / 2);
-            int minHalf = MulDiv(8, dpi, 96);
-            int maxHalf = MulDiv(32, dpi, 96);
-            if (maxHalf < minHalf) maxHalf = minHalf;
-
-            d.half = std::clamp(btnHalf, minHalf, maxHalf);
-        } else {
-            y = (LONG)winCy;
+        SetLayeredWindowAttributes(hWnd, 0, 255, LWA_ALPHA);
+        if (!(originalExStyle & WS_EX_LAYERED)) {
+            SetWindowLongPtrW(hWnd, GWL_EXSTYLE, originalExStyle);
         }
-
-        LONG lo = tb.top + d.half;
-        LONG hi = tb.bottom - d.half;
-
-        if (hi < lo) {
-            y = (tb.top + tb.bottom) / 2;
-        } else {
-            y = std::clamp(y, lo, hi);
-        }
-
-        d.pt.y = (int)y;
-        d.pt.x = (int)((tb.left + tb.right) / 2);
     }
-
-    return d;
+    MacGenieSetDwmTransitions(hWnd, TRUE);
 }
 
-class Renderer {
-   public:
-    FrameCtx ctx;
+static bool MacGenieShouldAnimate(HWND hWnd) {
+    if (!hWnd) return false;
+    LONG_PTR style = GetWindowLongPtrW(hWnd, GWL_STYLE);
+    if (style & WS_CHILD) return false;
 
-    Renderer() = default;
-    Renderer(const Renderer&) = delete;
-    Renderer& operator=(const Renderer&) = delete;
+    RECT r;
+    if (IsIconic(hWnd)) {
+        WINDOWPLACEMENT wp;
+        wp.length = sizeof(wp);
+        if (!GetWindowPlacement(hWnd, &wp)) return false;
+        r = wp.rcNormalPosition;
+    } else if (!GetWindowRect(hWnd, &r)) {
+        return false;
+    }
+    if ((r.right - r.left) < 40 || (r.bottom - r.top) < 40) return false;
+    return true;
+}
 
-    ~Renderer() {
-        if (m_work) {
-            WaitForThreadpoolWorkCallbacks(m_work, TRUE);
-            CloseThreadpoolWork(m_work);
+static bool MacGenieIsLaunchWindow(HWND hWnd) {
+    if (!hWnd) return false;
+    if (GetAncestor(hWnd, GA_ROOT) != hWnd) return false;
+    LONG_PTR style = GetWindowLongPtrW(hWnd, GWL_STYLE);
+    if (!(style & WS_CAPTION)) return false;
+    LONG_PTR exStyle = GetWindowLongPtrW(hWnd, GWL_EXSTYLE);
+    if (exStyle & WS_EX_TOOLWINDOW) return false;
+    return MacGenieShouldAnimate(hWnd);
+}
+
+static ID2D1PathGeometry* CreateQuadGeo(
+    ID2D1Factory* factory,
+    D2D1_POINT_2F p0, D2D1_POINT_2F p1,
+    D2D1_POINT_2F p2, D2D1_POINT_2F p3)
+{
+    ID2D1PathGeometry* geo = nullptr;
+    factory->CreatePathGeometry(&geo);
+    if (!geo) return nullptr;
+    ID2D1GeometrySink* sink = nullptr;
+    geo->Open(&sink);
+    sink->BeginFigure(p0, D2D1_FIGURE_BEGIN_FILLED);
+    sink->AddLine(p1);
+    sink->AddLine(p2);
+    sink->AddLine(p3);
+    sink->EndFigure(D2D1_FIGURE_END_CLOSED);
+    sink->Close();
+    sink->Release();
+    return geo;
+}
+
+static D2D1_POINT_2F BloatPoint(D2D1_POINT_2F p, D2D1_POINT_2F c, float amount = 0.5f) {
+    float dx = p.x - c.x; float dy = p.y - c.y;
+    float len = sqrtf(dx*dx + dy*dy);
+    if (len < 0.001f) return p;
+    return D2D1::Point2F(p.x + (dx/len)*amount, p.y + (dy/len)*amount);
+}
+
+HWND FindTaskbarForMonitor(HMONITOR hMon) {
+    HWND hMainTray = FindWindowW(L"Shell_TrayWnd", NULL);
+    HMONITOR mainMon = MonitorFromWindow(hMainTray, MONITOR_DEFAULTTOPRIMARY);
+    if (hMon == mainMon || !hMon) return hMainTray;
+
+    HWND hSecTray = NULL;
+    while ((hSecTray = FindWindowExW(NULL, hSecTray, L"Shell_SecondaryTrayWnd", NULL)) != NULL) {
+        if (MonitorFromWindow(hSecTray, MONITOR_DEFAULTTONULL) == hMon) {
+            return hSecTray;
         }
     }
+    return hMainTray;
+}
 
-    void Init() {
-        SYSTEM_INFO si = {};
-        GetSystemInfo(&si);
-
-        m_extra = std::clamp((int)si.dwNumberOfProcessors - 1, 0, 3);
-        if (m_extra > 0) {
-            m_work = CreateThreadpoolWork(&Renderer::Callback, this, nullptr);
-            if (!m_work) m_extra = 0;
-        }
-    }
-
-    void Run(long long pixels) {
-        m_next = 0;
-
-        if (m_extra > 0 && pixels > 150000) {
-            for (int i = 0; i < m_extra; i++) SubmitThreadpoolWork(m_work);
-            Worker();
-            WaitForThreadpoolWorkCallbacks(m_work, FALSE);
-        } else {
-            Worker();
-        }
-    }
-
-   private:
-    static VOID CALLBACK Callback(PTP_CALLBACK_INSTANCE, PVOID self, PTP_WORK) {
-        static_cast<Renderer*>(self)->Worker();
-    }
-
-    void Worker() {
-        constexpr int kChunk = 8;
-        Scratch sc;
-        sc.Init(ctx.py->w[0], ctx.bw);
-
-        for (;;) {
-            const LONG i = InterlockedIncrement(&m_next) - 1;
-            const int y0 = (int)i * kChunk;
-            if (y0 >= ctx.bh) break;
-            RenderRows(ctx, y0, std::min(ctx.bh, y0 + kChunk), sc);
-        }
-    }
-
-    PTP_WORK m_work = nullptr;
-    int m_extra = 0;
-    volatile LONG m_next = 0;
+// ---------------------------------------------------------------------------
+// Taskbar button lookup (UI Automation)
+//
+// The old implementation made one cross-process call per property per button
+// (dozens of round trips) on the UI thread of the app being minimized, which is
+// what delayed the start of the genie. The enumeration now fetches Name,
+// AutomationId and BoundingRectangle for every button in ONE cached request, and
+// the result is reused for a short while, so back-to-back animations are instant.
+// ---------------------------------------------------------------------------
+struct MacGenieTaskbarButton {
+    std::wstring nameLower;
+    std::wstring idLower;     // AutomationId, e.g. "appid: chrome"
+    RECT rect;
 };
 
-class Anim {
-   public:
-    enum Kind { Close, Open, Minimize };
+struct MacGenieButtonCache {
+    ULONGLONG tick = 0;
+    std::vector<MacGenieTaskbarButton> buttons;
+};
 
-    Anim() = default;
-    Anim(const Anim&) = delete;
-    Anim& operator=(const Anim&) = delete;
-    ~Anim() { End(); }
+static std::mutex g_UiaMutex;
+static std::unordered_map<HWND, MacGenieButtonCache> g_ButtonCache;
+static const ULONGLONG kButtonCacheTtlMs = 600;
 
-    void MarkCloaked(HWND hwnd) {
-        m_target = hwnd;
-        m_cloaked = true;
+static std::wstring MacGenieLower(const wchar_t* text) {
+    std::wstring r = text ? text : L"";
+    std::transform(r.begin(), r.end(), r.begin(), ::towlower);
+    return r;
+}
+
+// Must be called on a COM-initialized thread.
+static bool MacGenieEnumerateTaskbarButtons(HWND hTray, std::vector<MacGenieTaskbarButton>& out) {
+    IUIAutomation* pAutomation = nullptr;
+    HRESULT hr = CoCreateInstance(CLSID_CUIAutomation8_Guid, NULL, CLSCTX_INPROC_SERVER,
+                                  IID_IUIAutomation_Guid, (void**)&pAutomation);
+    if (FAILED(hr)) {
+        hr = CoCreateInstance(CLSID_CUIAutomation_Guid, NULL, CLSCTX_INPROC_SERVER,
+                              IID_IUIAutomation_Guid, (void**)&pAutomation);
+    }
+    if (FAILED(hr) || !pAutomation) return false;
+
+    bool ok = false;
+    IUIAutomationElement* pTray = nullptr;
+    IUIAutomationCacheRequest* pCache = nullptr;
+    IUIAutomationCondition* pButtonCond = nullptr;
+    IUIAutomationCondition* pListCond = nullptr;
+    IUIAutomationCondition* pOrCond = nullptr;
+    IUIAutomationElementArray* pArray = nullptr;
+
+    if (SUCCEEDED(pAutomation->ElementFromHandle(hTray, &pTray)) && pTray &&
+        SUCCEEDED(pAutomation->CreateCacheRequest(&pCache)) && pCache) {
+        pCache->AddProperty((PROPERTYID)UIA_NamePropertyId);
+        pCache->AddProperty((PROPERTYID)UIA_AutomationIdPropertyId);
+        pCache->AddProperty((PROPERTYID)UIA_BoundingRectanglePropertyId);
+        pCache->put_AutomationElementMode(AutomationElementMode_None);
+
+        VARIANT varBtn; VariantInit(&varBtn); varBtn.vt = VT_I4; varBtn.lVal = (int)UIA_ButtonControlTypeId;
+        pAutomation->CreatePropertyCondition((PROPERTYID)UIA_ControlTypePropertyId, varBtn, &pButtonCond);
+        VARIANT varList; VariantInit(&varList); varList.vt = VT_I4; varList.lVal = (int)UIA_ListItemControlTypeId;
+        pAutomation->CreatePropertyCondition((PROPERTYID)UIA_ControlTypePropertyId, varList, &pListCond);
+        if (pButtonCond && pListCond) pAutomation->CreateOrCondition(pButtonCond, pListCond, &pOrCond);
+
+        if (pOrCond &&
+            SUCCEEDED(pTray->FindAllBuildCache((TreeScope)TreeScope_Descendants, pOrCond, pCache, &pArray)) &&
+            pArray) {
+            int length = 0;
+            pArray->get_Length(&length);
+            for (int i = 0; i < length; i++) {
+                IUIAutomationElement* pItem = nullptr;
+                if (FAILED(pArray->GetElement(i, &pItem)) || !pItem) continue;
+                MacGenieTaskbarButton btn;
+                btn.rect = {0, 0, 0, 0};
+                BSTR name = nullptr;
+                BSTR id = nullptr;
+                if (SUCCEEDED(pItem->get_CachedName(&name)) && name) btn.nameLower = MacGenieLower(name);
+                if (SUCCEEDED(pItem->get_CachedAutomationId(&id)) && id) btn.idLower = MacGenieLower(id);
+                if (name) SysFreeString(name);
+                if (id) SysFreeString(id);
+                RECT r;
+                if (SUCCEEDED(pItem->get_CachedBoundingRectangle(&r)) && r.right > r.left) {
+                    btn.rect = r;
+                    out.push_back(std::move(btn));
+                }
+                pItem->Release();
+            }
+            ok = true;
+        }
+    }
+    if (pArray) pArray->Release();
+    if (pOrCond) pOrCond->Release();
+    if (pListCond) pListCond->Release();
+    if (pButtonCond) pButtonCond->Release();
+    if (pCache) pCache->Release();
+    if (pTray) pTray->Release();
+    pAutomation->Release();
+    return ok;
+}
+
+static bool MacGenieGetTaskbarButtons(HWND hTray, std::vector<MacGenieTaskbarButton>& out) {
+    {
+        std::lock_guard<std::mutex> lock(g_UiaMutex);
+        auto it = g_ButtonCache.find(hTray);
+        if (it != g_ButtonCache.end() && GetTickCount64() - it->second.tick < kButtonCacheTtlMs) {
+            out = it->second.buttons;
+            return true;
+        }
+    }
+    std::vector<MacGenieTaskbarButton> fresh;
+    if (!MacGenieEnumerateTaskbarButtons(hTray, fresh)) return false;
+    {
+        std::lock_guard<std::mutex> lock(g_UiaMutex);
+        MacGenieButtonCache& c = g_ButtonCache[hTray];
+        c.tick = GetTickCount64();
+        c.buttons = fresh;
+    }
+    out = std::move(fresh);
+    return true;
+}
+
+// The window's explicit AppUserModelID (what the taskbar groups by), lowercase.
+// Empty when the app did not set one. Must be called on a COM-initialized thread.
+static std::wstring MacGenieGetWindowAumidLower(HWND hWnd) {
+    static const PROPERTYKEY kAppUserModelId = {
+        {0x9F4C2855, 0x9F79, 0x4B39, {0xA8, 0xD0, 0xE1, 0xD4, 0x2D, 0xE1, 0xD5, 0xF3}}, 5};
+    std::wstring result;
+    IPropertyStore* ps = nullptr;
+    if (SUCCEEDED(SHGetPropertyStoreForWindow(hWnd, IID_IPropertyStore, (void**)&ps)) && ps) {
+        PROPVARIANT pv;
+        PropVariantInit(&pv);
+        if (SUCCEEDED(ps->GetValue(kAppUserModelId, &pv)) && pv.vt == VT_LPWSTR && pv.pwszVal) {
+            result = MacGenieLower(pv.pwszVal);
+        }
+        PropVariantClear(&pv);
+        ps->Release();
+    }
+    return result;
+}
+
+// Returns the horizontal centre of the taskbar button that belongs to hWndApp
+// (falls back to fallbackX, then to the per-window / per-process learned caches).
+int GetTaskbarButtonX(HWND hWndApp, int fallbackX, HMONITOR hMon) {
+    int targetX = fallbackX;
+    bool uiaFound = false;
+
+    std::wstring procNameLower = L"";
+    std::wstring exeFileLower = L"";
+    DWORD ownerPid = 0;
+    GetWindowThreadProcessId(hWndApp, &ownerPid);
+    if (ownerPid) {
+        HANDLE hProc = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, ownerPid);
+        if (hProc) {
+            WCHAR exePath[MAX_PATH] = {0};
+            DWORD exePathLen = MAX_PATH;
+            if (QueryFullProcessImageNameW(hProc, 0, exePath, &exePathLen)) {
+                WCHAR* name = wcsrchr(exePath, L'\\');
+                if (name) {
+                    exeFileLower = MacGenieLower(name + 1);
+                    procNameLower = exeFileLower;
+                    size_t dotPos = procNameLower.find(L'.');
+                    if (dotPos != std::wstring::npos) procNameLower = procNameLower.substr(0, dotPos);
+                }
+            }
+            CloseHandle(hProc);
+        }
     }
 
-    bool Prepare(HWND hwnd, Kind kind) {
-        t_busy = true;
-        m_started = true;
-        m_target = hwnd;
-        m_kind = kind;
+    std::wstring processKey = procNameLower;
+    if (!processKey.empty() && hMon) {
+        processKey += L"_" + std::to_wstring(reinterpret_cast<size_t>(hMon));
+    }
 
-        if (g_api.SetThreadDpiAwarenessContext)
-            m_oldDpi = g_api.SetThreadDpiAwarenessContext((HANDLE)(INT_PTR)-4);
+    HRESULT hr = CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
+    bool coInit = (hr == S_OK || hr == S_FALSE);
 
-        RECT wr, fr;
-        if (!GetWindowRect(hwnd, &wr)) return false;
+    if (hr == S_OK || hr == S_FALSE || hr == RPC_E_CHANGED_MODE) {
+        HWND hTray = FindTaskbarForMonitor(hMon);
+        std::vector<MacGenieTaskbarButton> buttons;
+        if (hTray && MacGenieGetTaskbarButtons(hTray, buttons) && !buttons.empty()) {
+            WCHAR titleW[512] = {0};
+            GetWindowTextW(hWndApp, titleW, 512);
+            std::wstring titleLower = MacGenieLower(titleW);
+            std::wstring aumidLower = MacGenieGetWindowAumidLower(hWndApp);
 
-        if (FAILED(g_api.DwmGetWindowAttribute(hwnd, kDwmExtendedFrameBounds, &fr, sizeof(fr))))
-            fr = wr;
+            std::wstring procHintLower = procNameLower;
+            if (procNameLower == L"chrome") procHintLower = L"google chrome";
+            else if (procNameLower == L"msedge") procHintLower = L"microsoft edge";
 
-        if (fr.left < wr.left || fr.top < wr.top || fr.right > wr.right || fr.bottom > wr.bottom)
-            fr = wr;
+            MONITORINFO mi = {0};
+            mi.cbSize = sizeof(MONITORINFO);
+            GetMonitorInfoW(hMon, &mi);
+            const int monRight = mi.rcMonitor.right;
 
-        const int ww = wr.right - wr.left;
-        const int wh = wr.bottom - wr.top;
-        const int fw = fr.right - fr.left;
-        const int fh = fr.bottom - fr.top;
+            // Window title split into words once (>= 4 chars) for the weak match.
+            std::vector<std::wstring> titleWords;
+            {
+                std::wstring cur;
+                for (wchar_t c : titleLower) {
+                    if (iswalnum(c)) cur += c;
+                    else { if (cur.length() >= 4) titleWords.push_back(cur); cur.clear(); }
+                }
+                if (cur.length() >= 4) titleWords.push_back(cur);
+            }
 
-        if (fw < 120 || fh < 60 || (long long)fw * fh > 8500000LL) return false;
+            int bestScore = 0;
+            for (const MacGenieTaskbarButton& btn : buttons) {
+                if (btn.rect.left >= monRight - 50) continue;     // tray / clock area
+                const std::wstring& nm = btn.nameLower;
+                const std::wstring& id = btn.idLower;
+                if (nm.empty() && id.empty()) continue;
 
-        UINT dpi = g_api.GetDpiForWindow ? g_api.GetDpiForWindow(hwnd) : 96;
-        if (!dpi) dpi = 96;
+                int score = 0;
+                // Exact application identity: the taskbar's AutomationId carries the AppUserModelID.
+                if (!aumidLower.empty() && id.find(aumidLower) != std::wstring::npos) score += 1500;
+                else if (!exeFileLower.empty() && id.find(exeFileLower) != std::wstring::npos) score += 700;
 
-        const bool zoomed = IsZoomed(hwnd) != FALSE;
-        const bool wantShadow = g_cfg.shadow && g_cfg.shadowAlpha > 0.01f && !zoomed;
-        const int pad = wantShadow ? MulDiv(48, dpi, 96) : 0;
-        const int ow = fw + 2 * pad;
-        const int oh = fh + 2 * pad;
+                if (!nm.empty()) {
+                    if (!titleLower.empty()) {
+                        if (titleLower == nm) score += 1000;
+                        if (titleLower.find(nm) != std::wstring::npos) score += 500;
+                        if (nm.find(titleLower) != std::wstring::npos) score += 500;
+                    }
+                    if (!procNameLower.empty() && nm.find(procNameLower) != std::wstring::npos) score += 400;
+                    if (!procHintLower.empty() && procHintLower != procNameLower &&
+                        nm.find(procHintLower) != std::wstring::npos) score += 900;
+                    for (const std::wstring& w : titleWords) {
+                        if (nm.find(w) != std::wstring::npos) score += 50;
+                    }
+                    if (nm.find(L"start") != std::wstring::npos) score -= 500;
+                    if (nm.find(L"search") != std::wstring::npos) score -= 500;
+                    if (nm.find(L"task view") != std::wstring::npos) score -= 500;
+                    if (nm.find(L"widgets") != std::wstring::npos) score -= 500;
+                }
 
-        int radius = 0;
-        DWORD pref = 0;
-
-        if (SUCCEEDED(g_api.DwmGetWindowAttribute(hwnd, kDwmCornerPreference, &pref,
-                                                  sizeof(pref))) &&
-            !zoomed) {
-            if (pref == 1) radius = 0;
-            else if (pref == 3) radius = MulDiv(4, dpi, 96);
-            else radius = MulDiv(8, dpi, 96);
+                if (score > bestScore) {
+                    bestScore = score;
+                    targetX = btn.rect.left + (btn.rect.right - btn.rect.left) / 2;
+                }
+            }
+            // A match made of nothing but a stray title word is not trustworthy.
+            if (bestScore >= 100) uiaFound = true; else targetX = fallbackX;
         }
+        if (coInit) CoUninitialize();
+    }
 
-        HDC screen = GetDC(nullptr);
-        struct ScreenRelease {
-            HDC dc;
-            ~ScreenRelease() { ReleaseDC(nullptr, dc); }
-        } screenRelease{screen};
-
-        Surface cap;
-        if (!cap.Create(screen, ww, wh)) return false;
-        if (!PrintWindow(hwnd, cap.dc, PW_RENDERFULLCONTENT)) return false;
-
-        const uint32_t* capPx = (const uint32_t*)cap.bits;
-        const int ox = fr.left - wr.left;
-        const int oy = fr.top - wr.top;
-        const uint32_t* framePx = capPx + (size_t)oy * ww + ox;
-
-        if (CaptureFailed(framePx, ww, fw, fh)) return false;
-        if (kind == Open && LooksBlank(framePx, ww, fw, fh)) return false;
-
-        if (!m_art.Create(screen, ow, oh)) return false;
-        uint32_t* art = (uint32_t*)m_art.bits;
-
-        auto cov = [&](int x, int y) -> int {
-            if (radius <= 0) return 255;
-
-            float dx = 0, dy = 0;
-
-            if (x < radius) dx = radius - (x + 0.5f);
-            else if (x >= fw - radius) dx = (x + 0.5f) - (fw - radius);
-
-            if (y < radius) dy = radius - (y + 0.5f);
-            else if (y >= fh - radius) dy = (y + 0.5f) - (fh - radius);
-
-            if (dx <= 0 || dy <= 0) return 255;
-
-            float c = radius - std::sqrt(dx * dx + dy * dy) + 0.5f;
-            return c <= 0 ? 0 : (c >= 1 ? 255 : (int)(c * 255 + 0.5f));
-        };
-
-        auto covRow = [&](int y, uint8_t* out) {
-            memset(out, 255, fw);
-
-            if (radius > 0 && (y < radius || y >= fh - radius)) {
-                for (int x = 0; x < radius; x++) {
-                    out[x] = (uint8_t)cov(x, y);
-                    out[fw - 1 - x] = (uint8_t)cov(fw - 1 - x, y);
-                }
-            }
-        };
-
-        std::vector<uint8_t> rowCov(fw);
-
-        if (pad > 0)
-            BuildShadow(art, ow, oh, pad, pad / 4, fw, fh, radius + 2, g_cfg.shadowAlpha);
-
-        for (int y = 0; y < fh; y++) {
-            covRow(y, rowCov.data());
-
-            const uint32_t* s = framePx + (size_t)y * ww;
-            uint32_t* d = art + (size_t)(pad + y) * ow + pad;
-
-            for (int x = 0; x < fw; x++) {
-                const uint32_t c = rowCov[x];
-                const uint32_t px = s[x];
-
-                if (c == 255) {
-                    d[x] = 0xFF000000u | (px & 0x00FFFFFFu);
-                } else if (c != 0) {
-                    uint32_t r = ((px >> 16) & 0xFF) * c / 255;
-                    uint32_t g = ((px >> 8) & 0xFF) * c / 255;
-                    uint32_t b = (px & 0xFF) * c / 255;
-                    uint32_t sa = d[x] >> 24;
-                    uint32_t a = c + sa * (255 - c) / 255;
-                    d[x] = (a << 24) | (r << 16) | (g << 8) | b;
-                }
-            }
+    std::lock_guard<std::mutex> lock(g_CacheMutex);
+    if (uiaFound) {
+        g_IconPositions[hWndApp] = targetX;
+        if (!processKey.empty()) {
+            if (g_ProcessIconPositions.size() > 256) g_ProcessIconPositions.clear();
+            g_ProcessIconPositions[processKey] = targetX;
         }
+    } else if (g_IconPositions.count(hWndApp)) {
+        targetX = g_IconPositions[hWndApp];
+    } else if (!processKey.empty() && g_ProcessIconPositions.count(processKey)) {
+        targetX = g_ProcessIconPositions[processKey];
+    }
 
-        cap.Free();
-        m_pyr.Build(art, ow, oh);
+    return targetX;
+}
 
-        m_aw = ow;
-        m_ah = oh;
+static void MacGenieFinishClose(MacGenieAnimData* data) {
+    HWND hWnd = data->hRealWnd;
+    if (!IsWindow(hWnd)) return;
+    if (g_unloading.load(std::memory_order_relaxed)) {
+        MacGenieSetCloak(hWnd, FALSE);
+        MacGenieSetDwmTransitions(hWnd, TRUE);
+        RemovePropW(hWnd, L"GenieCloseAnimating");
+        RemovePropW(hWnd, L"GenieCloseBypass");
+        if (data->closeMsg == MACGENIE_ASYNC_HIDE) {
+            ShowWindowAsync_Original(hWnd, SW_HIDE);
+        } else if (data->closeMsg == WM_SYSCOMMAND) {
+            PostMessageW(hWnd, WM_SYSCOMMAND, SC_CLOSE, 0);
+        } else if (data->closeMsg == WM_CLOSE) {
+            PostMessageW(hWnd, WM_CLOSE, 0, 0);
+        }
+        return;
+    }
+    if (data->closeMsg == WM_DESTROY) return;
 
-        const RECT A = {fr.left - pad, fr.top - pad, fr.right + pad, fr.bottom + pad};
-        bool topmost = false;
-
-        if (kind == Minimize) {
-            const Dock dock = ComputeDock(hwnd, fr, dpi);
-
-            m_genie = g_cfg.minStyle == MinStyle::Genie &&
-                      (dock.edge == Edge::Bottom || dock.edge == Edge::Top);
-
-            topmost = IsFrontmostIn(hwnd, wr);
-            m_slow = g_cfg.shiftSlow && (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
-
-            const long dxs = dock.pt.x;
-            const long dys = dock.pt.y;
-
-            long L, T, R, B;
-
-            if (m_genie) {
-                const bool top = dock.edge == Edge::Top;
-                const long margin = 2;
-                const float iconH = std::max(8.f, dock.half * 1.5f);
-
-                const float farEdge = top ? (float)A.bottom : (float)A.top;
-                const float dockC = top ? (farEdge - (float)dys) : ((float)dys - farEdge);
-
-                const float top0 = (float)margin;
-                const float bot0 = top0 + (float)oh;
-
-                float dockTop = (float)margin + dockC - iconH * 0.5f;
-                dockTop = std::max(dockTop,
-                                   top0 + std::max(0.35f * oh, 60.f * dpi / 96.f));
-
-                const float dockBot = dockTop + iconH;
-                const float bhC = std::ceil(std::max(dockBot, bot0)) + (float)margin;
-
-                L = std::min((long)A.left, dxs - dock.half - margin) - margin;
-                R = std::max((long)A.right, dxs + dock.half + margin) + margin;
-
-                const long bhL = (long)bhC;
-
-                if (top) {
-                    B = A.bottom + margin;
-                    T = B - bhL;
-                } else {
-                    T = A.top - margin;
-                    B = T + bhL;
-                }
-
-                m_geo.flip = top;
-                m_geo.ax = (float)(A.left - L);
-                m_geo.aw = (float)ow;
-                m_geo.ay = top0;
-                m_geo.ah = (float)oh;
-                m_geo.dxL = (float)(dxs - L - dock.half);
-                m_geo.dxR = (float)(dxs - L + dock.half);
-                m_geo.dockTop = dockTop;
-                m_geo.dockBot = dockBot;
-            } else {
-                L = std::min((long)A.left, dxs - 2);
-                R = std::max((long)A.right, dxs + 2);
-                T = std::min((long)A.top, dys - 2);
-                B = std::max((long)A.bottom, dys + 2);
-
-                m_cx0 = (float)((A.left + A.right) * 0.5 - L);
-                m_cy0 = (float)((A.top + A.bottom) * 0.5 - T);
-                m_cx1 = (float)(dxs - L);
-                m_cy1 = (float)(dys - T);
-                m_sEnd = std::max(0.04f, (float)(2 * dock.half) / (float)fw);
-            }
-
-            m_pos = {L, T};
-            m_bw = (int)(R - L);
-            m_bh = (int)(B - T);
+    SetPropW(hWnd, L"GenieCloseHandled", (HANDLE)1);
+    int waitSteps;
+    if (data->closeMsg == MACGENIE_ASYNC_HIDE) {
+        ShowWindowAsync_Original(hWnd, SW_HIDE);
+        waitSteps = 50;
+    } else {
+        SetPropW(hWnd, L"GenieCloseBypass", (HANDLE)1);
+        if (data->closeMsg == WM_SYSCOMMAND) {
+            PostMessageW(hWnd, WM_SYSCOMMAND, SC_CLOSE, 0);
         } else {
-            int affMargin = (kind == Open) ? MulDiv(16, dpi, 96) : 0;
+            PostMessageW(hWnd, WM_CLOSE, 0, 0);
+        }
+        waitSteps = 200;
+    }
+    for (int i = 0; i < waitSteps && IsWindow(hWnd) && IsWindowVisible(hWnd) &&
+                    !g_unloading.load(std::memory_order_relaxed); ++i) {
+        Sleep(10);
+    }
+    if (IsWindow(hWnd)) {
+        MacGenieSetCloak(hWnd, FALSE);
+        RemovePropW(hWnd, L"GenieCloseAnimating");
+        MacGenieSetDwmTransitions(hWnd, TRUE);
+        if (IsWindowVisible(hWnd)) {
+            RemovePropW(hWnd, L"GenieCloseHandled");
+            RemovePropW(hWnd, L"GenieCloseBypass");
+        }
+    }
+}
 
-            m_pos = {A.left - affMargin, A.top - affMargin};
-            m_bw = ow + 2 * affMargin;
-            m_bh = oh + 2 * affMargin;
-            m_cx0 = affMargin + ow * 0.5f;
-            m_cy0 = affMargin + oh * 0.5f;
+static void CalculateLampVertexMacOS(float tx, float ty, float p, const Geometry& w, const Geometry& i, float *outX, float *outY) {
+    float split = 0.3f;
+    float k = (p <= split) ? (p / split) : 1.0f;
+    float j = (p > split) ? ((p - split) / (1.0f - split)) : 0.0f;
+
+    float expandHeight = (i.y - w.y - w.height);
+    float fullHeight = (i.y - w.y) - (expandHeight * (1.0f - k));
+    float height = fullHeight - (j * fullHeight);
+
+    float y = ty * height;
+    float x = tx * (i.width) + tx * (w.width - i.width) * (1.0f - j) * (1.0f - ty) + tx * (w.width - i.width) * (1.0f - k) * ty;
+
+    float offsetX = (i.x - w.x) * (y / (fullHeight + 0.1f)) * k + (i.x - w.x) * j;
+    float offsetY = i.y - w.y - height - (expandHeight * (1.0f - k));
+
+    float effectX = sinf(((height - y) / fullHeight) * 2.0f * PI + PI) * (w.x + w.width * tx - (i.x + i.width * tx)) / 7.0f * k;
+
+    *outX = w.x + x + offsetX + effectX;
+    *outY = w.y + y + offsetY;
+}
+
+static void CalculateLampVertex(float tx, float ty, float p, const Geometry& w,
+                                const Geometry& i, float* outX, float* outY) {
+    if (i.y + i.height * 0.5f >= w.y + w.height * 0.5f) {
+        CalculateLampVertexMacOS(tx, ty, p, w, i, outX, outY);
+        return;
+    }
+    Geometry wm = { w.x, -(w.y + w.height), w.width, w.height };
+    Geometry im = { i.x, -(i.y + i.height), i.width, i.height };
+    float yM;
+    CalculateLampVertexMacOS(tx, 1.0f - ty, p, wm, im, outX, &yM);
+    *outY = -yM;
+}
+
+// Horizontal genie (dock on the left / right edge): the same lamp curve evaluated
+// with the X and Y axes swapped, so the window funnels sideways instead of down.
+static void CalculateLampVertexHorizontal(float tx, float ty, float p, const Geometry& w,
+                                          const Geometry& i, float* outX, float* outY) {
+    Geometry wT = { w.y, w.x, w.height, w.width };
+    Geometry iT = { i.y, i.x, i.height, i.width };
+    float ox, oy;
+    CalculateLampVertex(ty, tx, p, wT, iT, &ox, &oy);
+    *outX = oy;
+    *outY = ox;
+}
+
+static RECT GetGenieMonitorUnion(const RECT& winRect, HMONITOR hDockMon) {
+    RECT winMon;
+    HMONITOR hWinMon = MonitorFromRect(&winRect, MONITOR_DEFAULTTONEAREST);
+    MONITORINFO wmi = {0};
+    wmi.cbSize = sizeof(wmi);
+    if (hWinMon && GetMonitorInfoW(hWinMon, &wmi)) {
+        winMon = wmi.rcMonitor;
+    } else {
+        winMon = winRect;
+    }
+
+    RECT dockMon;
+    MONITORINFO dmi = {0};
+    dmi.cbSize = sizeof(dmi);
+    if (hDockMon && GetMonitorInfoW(hDockMon, &dmi)) {
+        dockMon = dmi.rcMonitor;
+    } else {
+        dockMon = winMon;
+    }
+
+    RECT u;
+    u.left   = (winMon.left   < dockMon.left)   ? winMon.left   : dockMon.left;
+    u.top    = (winMon.top    < dockMon.top)    ? winMon.top    : dockMon.top;
+    u.right  = (winMon.right  > dockMon.right)  ? winMon.right  : dockMon.right;
+    u.bottom = (winMon.bottom > dockMon.bottom) ? winMon.bottom : dockMon.bottom;
+    return u;
+}
+
+static void ClampGenieCanvas(int& left, int& top, int& right, int& bottom,
+                             const RECT& winRect, int dockX, const RECT& monUnion) {
+    if (left   < monUnion.left)   left   = monUnion.left;
+    if (right  > monUnion.right)  right  = monUnion.right;
+    if (top    < monUnion.top)    top    = monUnion.top;
+    if (bottom > monUnion.bottom) bottom = monUnion.bottom;
+
+    if (left  > winRect.left)  left  = winRect.left;
+    if (right < winRect.right) right = winRect.right;
+    if (top   > winRect.top)   top   = winRect.top;
+    if (bottom < winRect.bottom) bottom = winRect.bottom;
+    if (left  > dockX - 16)    left  = dockX - 16;
+    if (right < dockX + 16)    right = dockX + 16;
+}
+
+DWORD WINAPI MacGenieAnimThread(LPVOID lpParam) {
+    MacGenieAnimData* data = (MacGenieAnimData*)lpParam;
+    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST);
+
+    Geometry wGeom = { (float)data->targetRect.left, (float)data->targetRect.top, (float)data->width, (float)data->height };
+
+    MONITORINFO mi = {0};
+    mi.cbSize = sizeof(MONITORINFO);
+    HMONITOR hMon = data->hMon;
+    GetMonitorInfoW(hMon, &mi);
+
+    UINT dpiX = 96, dpiY = 96;
+    HMODULE hShcore = LoadLibraryExW(L"Shcore.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
+    if (hShcore) {
+        typedef HRESULT (WINAPI *GetDpiForMonitor_t)(HMONITOR, int, UINT*, UINT*);
+        auto pGetDpiForMonitor = (GetDpiForMonitor_t)GetProcAddress(hShcore, "GetDpiForMonitor");
+        if (pGetDpiForMonitor) pGetDpiForMonitor(hMon, 0, &dpiX, &dpiY);
+        FreeLibrary(hShcore);
+    }
+    float dpiScale = dpiY / 96.0f;
+    float scaledIconSize = COMPAT_ICON_SIZE * dpiScale;
+
+    // Where the genie tip ends. It dives into the taskbar by "dock depth" percent of
+    // the bar height (macOS flows into the dock icon, it does not stop at the edge).
+    const float dockDepth = g_dockDepthPct.load(std::memory_order_relaxed) / 100.0f;
+    float taskbarH = 48.0f * dpiScale;                         // Windows 11 default, used if unmeasurable
+    bool barOnTop = false;
+    float barEdge = (float)mi.rcMonitor.bottom - taskbarH;     // edge of the bar facing the screen centre
+
+    HWND hTrayGeom = FindTaskbarForMonitor(hMon);
+    if (hTrayGeom) {
+        RECT tr;
+        if (GetWindowRect(hTrayGeom, &tr)) {
+            const int th = tr.bottom - tr.top;
+            const int tw = tr.right - tr.left;
+            if (th > 0 && tw > th) {                            // horizontal bar
+                barOnTop = (tr.top + tr.bottom) < (mi.rcMonitor.top + mi.rcMonitor.bottom);
+                const bool parked = barOnTop ? (tr.bottom <= mi.rcMonitor.top + 8)
+                                             : (tr.top >= mi.rcMonitor.bottom - 8);
+                if (!parked) {                                  // auto-hidden bars are parked off-screen
+                    taskbarH = (float)th;
+                    barEdge = barOnTop ? (float)tr.bottom : (float)tr.top;
+                } else {
+                    barEdge = barOnTop ? (float)mi.rcMonitor.top + taskbarH
+                                       : (float)mi.rcMonitor.bottom - taskbarH;
+                }
+            }
+        }
+    }
+
+    Geometry iGeom = {
+        (float)data->targetDockX - 11.0f,
+        0.0f,
+        22.0f,
+        scaledIconSize
+    };
+    if (barOnTop) iGeom.y = (barEdge - taskbarH * dockDepth) - iGeom.height;
+    else          iGeom.y = barEdge + taskbarH * dockDepth;
+
+    bool horizontalGenie = false;
+    if (data->isClosing) {
+        const int direction = g_closeDirection.load(std::memory_order_relaxed);
+        iGeom.height = 22.0f;
+        if (direction == 0) {
+            horizontalGenie = true;
+            iGeom.x = (float)mi.rcMonitor.left;
+            iGeom.y = (float)(mi.rcMonitor.top + mi.rcMonitor.bottom) * 0.5f - 11.0f;
+        } else if (direction == 1) {
+            horizontalGenie = true;
+            iGeom.x = (float)(mi.rcMonitor.right - 22);
+            iGeom.y = (float)(mi.rcMonitor.top + mi.rcMonitor.bottom) * 0.5f - 11.0f;
+        } else if (direction == 3) {
+            iGeom.x = (float)(mi.rcMonitor.left + mi.rcMonitor.right) * 0.5f - 11.0f;
+            iGeom.y = (float)mi.rcMonitor.bottom - iGeom.height;
+        } else {
+            iGeom.x = (float)(mi.rcMonitor.left + mi.rcMonitor.right) * 0.5f - 11.0f;
+            iGeom.y = (float)mi.rcMonitor.top;
+        }
+    }
+
+    int xTiles = g_tileCount.load(std::memory_order_relaxed);
+    int yTiles = xTiles;
+
+    const int origLeftB = data->targetRect.left;
+    const int wB = data->width;
+    const int dockXB = data->isClosing ? (int)(iGeom.x + iGeom.width * 0.5f) : data->targetDockX;
+
+    const float iLeftF = iGeom.x;
+    const float iWidthF = iGeom.width;
+    const float sway = fmaxf(fabsf((float)origLeftB - iLeftF), fabsf((float)origLeftB + wB - iLeftF - iWidthF)) / 7.0f;
+    int padX = (int)((wB / 2 > sway ? wB / 2 : sway) + 1);
+
+    int boundLeft   = ((origLeftB < dockXB) ? origLeftB : dockXB) - padX;
+    int boundRight  = (((origLeftB + wB) > dockXB) ? (origLeftB + wB) : dockXB) + padX;
+    int boundTop    = (int)fminf(wGeom.y, iGeom.y);
+    int boundBottom = (int)fmaxf(wGeom.y + wGeom.height, iGeom.y + iGeom.height);
+    if (horizontalGenie) {
+        // The lamp's sideways sway now happens along Y.
+        const float swayY = fmaxf(fabsf(wGeom.y - iGeom.y),
+                                  fabsf(wGeom.y + wGeom.height - iGeom.y - iGeom.height)) / 7.0f;
+        const int padY = (int)((wGeom.height / 2 > swayY ? wGeom.height / 2 : swayY) + 1);
+        boundTop    -= padY;
+        boundBottom += padY;
+    }
+
+    RECT monUnion = GetGenieMonitorUnion(data->targetRect, data->hMon);
+    ClampGenieCanvas(boundLeft, boundTop, boundRight, boundBottom, data->targetRect, dockXB, monUnion);
+
+    int vLeft = boundLeft;
+    int vTop = boundTop;
+    int vWidth = boundRight - boundLeft;
+    int vHeight = (boundBottom - boundTop) - 1;
+    if (vWidth < 1) vWidth = 1;
+    if (vHeight < 1) vHeight = 1;
+
+    HDC hScreenDC = GetDC(NULL);
+    HDC hMemDC = CreateCompatibleDC(hScreenDC);
+
+    BITMAPINFO bmi = {{0}};
+    bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    bmi.bmiHeader.biWidth = vWidth;
+    bmi.bmiHeader.biHeight = -vHeight;
+    bmi.bmiHeader.biPlanes = 1;
+    bmi.bmiHeader.biBitCount = 32;
+    bmi.bmiHeader.biCompression = BI_RGB;
+
+    void* pTargetBits = nullptr;
+    HBITMAP hTargetBmp = CreateDIBSection(hScreenDC, &bmi, DIB_RGB_COLORS, &pTargetBits, NULL, 0);
+    HBITMAP hOldBmp = (HBITMAP)SelectObject(hMemDC, hTargetBmp);
+
+    HWND hGhost = CreateWindowExW(
+        WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE,
+        L"STATIC", NULL, WS_POPUP,
+        vLeft, vTop, vWidth, vHeight,
+        NULL, NULL, NULL, NULL);
+
+    ID2D1DCRenderTarget* rt = nullptr;
+    ID2D1Bitmap* snapshotBmp = nullptr;
+    ID2D1BitmapBrush* bmpBrush = nullptr;
+
+    if (g_d2dFactory) {
+        D2D1_RENDER_TARGET_PROPERTIES rtProps = D2D1::RenderTargetProperties(
+            D2D1_RENDER_TARGET_TYPE_DEFAULT,
+            D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED),
+            0, 0, D2D1_RENDER_TARGET_USAGE_GDI_COMPATIBLE, D2D1_FEATURE_LEVEL_DEFAULT
+        );
+        g_d2dFactory->CreateDCRenderTarget(&rtProps, &rt);
+        if (rt) {
+            rt->SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE);
+            D2D1_BITMAP_PROPERTIES bmpProps = D2D1::BitmapProperties(
+                D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED)
+            );
+            rt->CreateBitmap(D2D1::SizeU(data->width, data->height), data->pBits, data->width * 4, bmpProps, &snapshotBmp);
+            if (snapshotBmp) {
+                D2D1_BITMAP_BRUSH_PROPERTIES brushProps = D2D1::BitmapBrushProperties(
+                    D2D1_EXTEND_MODE_CLAMP, D2D1_EXTEND_MODE_CLAMP,
+                    D2D1_BITMAP_INTERPOLATION_MODE_LINEAR
+                );
+                rt->CreateBitmapBrush(snapshotBmp, &brushProps, nullptr, &bmpBrush);
+            }
+        }
+    }
+    bool d2dOk = (rt && bmpBrush);
+
+    const double animDur = (double)data->durationMs;
+    LARGE_INTEGER qpcFreq, qpcStart, qpcNow;
+    QueryPerformanceFrequency(&qpcFreq);
+    QueryPerformanceCounter(&qpcStart);
+
+    std::vector<std::vector<D2D1_POINT_2F>> grid(yTiles + 1, std::vector<D2D1_POINT_2F>(xTiles + 1));
+
+    BOOL firstFrame = TRUE;
+
+    double frameIntervalMs = 1000.0 / 240.0;
+    DWM_TIMING_INFO ti = { sizeof(ti) };
+    if (SUCCEEDED(DwmGetCompositionTimingInfo(NULL, &ti)) && ti.rateRefresh.uiDenominator) {
+        double hz = (double)ti.rateRefresh.uiNumerator / ti.rateRefresh.uiDenominator;
+        frameIntervalMs = 1000.0 / (hz * 2.0);
+    }
+    HANDLE hFrameTimer = CreateWaitableTimerExW(
+        nullptr, nullptr, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION,
+        TIMER_MODIFY_STATE | SYNCHRONIZE);
+    if (!hFrameTimer) {
+        hFrameTimer = CreateWaitableTimerExW(nullptr, nullptr, 0, TIMER_MODIFY_STATE | SYNCHRONIZE);
+    }
+
+    if (d2dOk) {
+        for (;;) {
+            QueryPerformanceCounter(&qpcNow);
+            const LARGE_INTEGER qpcFrameStart = qpcNow;
+            double elapsedMs = (qpcNow.QuadPart - qpcStart.QuadPart) * 1000.0 / qpcFreq.QuadPart;
+            BOOL lastFrame = (elapsedMs >= animDur);
+
+            float raw_p = (float)fmin(elapsedMs / animDur, 1.0);
+            
+            // Timing curve from the settings (cubic-bezier presets). Minimize and
+            // restore/launch have separate curves; restore plays the lamp in reverse.
+            float eased_p = MacGenieEase(data->isRising ? g_easeRestore.load(std::memory_order_relaxed)
+                                                        : g_easeMinimize.load(std::memory_order_relaxed),
+                                         raw_p);
+
+            float t = data->isRising ? (1.0f - eased_p) : eased_p;
+
+            RECT bindRect = { 0, 0, vWidth, vHeight };
+            rt->BindDC(hMemDC, &bindRect);
+            rt->BeginDraw();
+            rt->Clear(D2D1::ColorF(0, 0, 0, 0));
+            rt->SetAntialiasMode(D2D1_ANTIALIAS_MODE_ALIASED);
+
+            for (int y = 0; y <= yTiles; y++) {
+                for (int x = 0; x <= xTiles; x++) {
+                    float tx = (float)x / xTiles, ty = (float)y / yTiles;
+                    float px, py;
+                    if (horizontalGenie) CalculateLampVertexHorizontal(tx, ty, t, wGeom, iGeom, &px, &py);
+                    else                 CalculateLampVertex(tx, ty, t, wGeom, iGeom, &px, &py);
+                    grid[y][x] = D2D1::Point2F(px - vLeft, py - vTop);
+                }
+            }
+
+            bool degenerate = false;
+            {
+                float left   = grid[0][0].x, right  = grid[0][0].x;
+                float top    = grid[0][0].y, bottom = grid[0][0].y;
+                for (int gy = 0; gy <= yTiles; gy++) {
+                    for (int gx = 0; gx <= xTiles; gx++) {
+                        left   = fminf(left,   grid[gy][gx].x);
+                        right  = fmaxf(right,  grid[gy][gx].x);
+                        top    = fminf(top,    grid[gy][gx].y);
+                        bottom = fmaxf(bottom, grid[gy][gx].y);
+                    }
+                }
+                degenerate = (right - left) < 2.0f || (bottom - top) < 2.0f;
+            }
+
+            // Corners are already rounded inside the snapshot (alpha), so no per-frame
+            // mask layer is needed - cheaper and the corners warp with the window.
+            if (!degenerate) {
+                for (int y = 0; y < yTiles; y++) {
+                    for (int x = 0; x < xTiles; x++) {
+                        D2D1_POINT_2F p1 = grid[y][x];
+                        D2D1_POINT_2F p2 = grid[y][x+1];
+                        D2D1_POINT_2F p3 = grid[y+1][x];
+                        D2D1_POINT_2F p4 = grid[y+1][x+1];
+
+                        D2D1_POINT_2F c = D2D1::Point2F((p1.x+p2.x+p3.x+p4.x)/4.0f, (p1.y+p2.y+p3.y+p4.y)/4.0f);
+
+                        float quadW = fmaxf(fabsf(p2.x - p1.x), fabsf(p4.x - p3.x));
+                        float quadH = fmaxf(fabsf(p3.y - p1.y), fabsf(p4.y - p2.y));
+                        float bloatAmt = fminf(quadW, quadH) * 0.05f;
+                        bloatAmt = fmaxf(0.20f, fminf(0.40f, bloatAmt));
+
+                        ID2D1PathGeometry* quadGeo = CreateQuadGeo(g_d2dFactory,
+                            BloatPoint(p1, c, bloatAmt), BloatPoint(p2, c, bloatAmt),
+                            BloatPoint(p4, c, bloatAmt), BloatPoint(p3, c, bloatAmt));
+
+                        if (quadGeo) {
+                            float sx = ((float)x / xTiles) * wGeom.width;
+                            float sy = ((float)y / yTiles) * wGeom.height;
+                            float sw = wGeom.width / xTiles;
+                            float sh = wGeom.height / yTiles;
+
+                            float m11 = (p2.x - p1.x) / sw;
+                            float m12 = (p2.y - p1.y) / sw;
+                            float m21 = (p3.x - p1.x) / sh;
+                            float m22 = (p3.y - p1.y) / sh;
+                            float m31 = p1.x - sx * m11 - sy * m21;
+                            float m32 = p1.y - sx * m12 - sy * m22;
+
+                            bmpBrush->SetTransform(D2D1::Matrix3x2F(m11, m12, m21, m22, m31, m32));
+                            rt->FillGeometry(quadGeo, bmpBrush);
+                            quadGeo->Release();
+                        }
+                    }
+                }
+            }
+            rt->EndDraw();
+
+            if (!degenerate) {
+                POINT ptDst = { vLeft, vTop };
+                SIZE sz = { vWidth, vHeight };
+                POINT ptSrc = { 0, 0 };
+                BLENDFUNCTION bf = { AC_SRC_OVER, 0, 255, AC_SRC_ALPHA };
+                UpdateLayeredWindow(hGhost, hScreenDC, &ptDst, &sz, hMemDC, &ptSrc, 0, &bf, ULW_ALPHA);
+
+                if (firstFrame) {
+                    ShowWindow(hGhost, SW_SHOWNOACTIVATE);
+                }
+            }
+
+            if (lastFrame) break;
+            if (g_unloading.load(std::memory_order_relaxed)) break;
+
+            if (firstFrame && !degenerate) {
+                DwmFlush();
+                firstFrame = FALSE;
+                if (data->hFirstFrameShown) SetEvent(data->hFirstFrameShown);
+            }
+
+            if (hFrameTimer) {
+                LARGE_INTEGER qpcAfter;
+                QueryPerformanceCounter(&qpcAfter);
+                double spentMs = (qpcAfter.QuadPart - qpcFrameStart.QuadPart) * 1000.0 / qpcFreq.QuadPart;
+                double waitMs = frameIntervalMs - spentMs;
+                if (waitMs > 0.1) {
+                    LARGE_INTEGER due;
+                    due.QuadPart = -(LONGLONG)(waitMs * 10000.0);
+                    SetWaitableTimer(hFrameTimer, &due, 0, nullptr, nullptr, FALSE);
+                    WaitForSingleObject(hFrameTimer, 100);
+                } else {
+                    SwitchToThread();
+                }
+            } else {
+                Sleep(1);
+            }
+        }
+    }
+
+    if (hFrameTimer) { CloseHandle(hFrameTimer); hFrameTimer = nullptr; }
+
+    if (data->isRising) {
+        if (data->hiddenByCloak) {
+            MacGenieSetCloak(data->hRealWnd, FALSE);
+        } else {
+            SetLayeredWindowAttributes(data->hRealWnd, 0, 255, LWA_ALPHA);
+            if (!(data->originalExStyle & WS_EX_LAYERED)) {
+                SetWindowLongPtrW(data->hRealWnd, GWL_EXSTYLE, data->originalExStyle);
+            }
+        }
+    }
+
+    if (!data->deferredMinimize && !data->isClosing) {
+        MacGenieSetDwmTransitions(data->hRealWnd, TRUE);
+    }
+    if (data->isClosing) MacGenieFinishClose(data);
+
+    if (bmpBrush) { bmpBrush->Release(); bmpBrush = nullptr; }
+    if (snapshotBmp) { snapshotBmp->Release(); snapshotBmp = nullptr; }
+    if (rt) { rt->Release(); rt = nullptr; }
+
+    SelectObject(hMemDC, hOldBmp);
+    DeleteObject(hTargetBmp);
+    DeleteObject(data->hBitmap);
+    DeleteDC(hMemDC);
+    ReleaseDC(NULL, hScreenDC);
+    DestroyWindow(hGhost);
+
+    if (data->hFirstFrameShown) {
+        SetEvent(data->hFirstFrameShown);
+        CloseHandle(data->hFirstFrameShown);
+    }
+
+    if (data->deferredMinimize) {
+        int unhideMs = data->unhideDurationMs;
+        int animMs = data->durationMs;
+        if (data->requestedUnhide && unhideMs > animMs) {
+            int remaining = unhideMs - animMs;
+            while (remaining > 0 && !g_unloading.load(std::memory_order_relaxed)) {
+                int chunk = remaining < 20 ? remaining : 20;
+                Sleep(chunk);
+                remaining -= chunk;
+            }
         }
 
-        if (m_bw < 1 || m_bh < 1 || (long long)m_bw * m_bh > 24000000LL) return false;
-        if (!m_frame.Create(screen, m_bw, m_bh)) return false;
+        if (!g_unloading.load(std::memory_order_relaxed) && IsWindow(data->hRealWnd)) {
+            SetPropW(data->hRealWnd, L"GenieBypass", (HANDLE)1);
+            SendMessageTimeoutW(data->hRealWnd, WM_SYSCOMMAND, SC_MINIMIZE, 0, SMTO_NORMAL, 1000, NULL);
+            RemovePropW(data->hRealWnd, L"GenieBypass");
+        }
+        if (IsWindow(data->hRealWnd)) {
+            MacGenieSetCloak(data->hRealWnd, FALSE);
+            MacGenieSetDwmTransitions(data->hRealWnd, TRUE);
+        }
+        if (data->requestedUnhide && !g_unloading.load(std::memory_order_relaxed)) {
+            if (data->hNextApp && IsWindow(data->hNextApp) && IsWindowVisible(data->hNextApp)) {
+                SetForegroundWindow(data->hNextApp);
+            } else {
+                SetForegroundWindow(FindWindowW(L"Progman", NULL));
+            }
+        }
+    }
 
-        m_rows.assign((size_t)m_bh, RowMap());
-        m_spans.assign((size_t)m_bh, RowSpan());
-        m_renderer.Init();
+    {
+        std::lock_guard<std::mutex> lock(g_CacheMutex);
+        g_AnimActive.erase(data->hRealWnd);
+    }
+    delete data;
+    return 0;
+}
 
-        if (!EnsureOverlayClass()) return false;
+DWORD WINAPI MacGenieAnimThreadClassic(LPVOID lpParam) {
+    MacGenieAnimData* data = (MacGenieAnimData*)lpParam;
+    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST);
 
-        m_overlay = CreateWindowExW(
-            WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW,
-            kOverlayClass, L"", WS_POPUP, m_pos.x, m_pos.y, m_bw, m_bh, nullptr, nullptr,
-            GetModuleHandleW(nullptr), nullptr);
+    const int W = data->width;
+    const int H = data->height;
+    RECT mon;
+    MONITORINFO mmi; mmi.cbSize = sizeof(mmi);
+    if (data->hMon && GetMonitorInfoW(data->hMon, &mmi)) {
+        mon = mmi.rcMonitor;
+    } else {
+        mon.left = 0; mon.top = 0;
+        mon.right = GetSystemMetrics(SM_CXSCREEN);
+        mon.bottom = GetSystemMetrics(SM_CYSCREEN);
+    }
 
-        if (!m_overlay) return false;
+    const int origLeft = data->targetRect.left;
+    const int origTop  = data->targetRect.top;
+    const float origCenterX = (float)origLeft + W * 0.5f;
 
-        Frame(0.0);
+    int dockX = data->targetDockX;
+    if (dockX < mon.left) dockX = mon.left;
+    if (dockX > mon.right) dockX = mon.right;
+    float dockY = (float)mon.bottom;
+    if (HWND hTray = FindTaskbarForMonitor(data->hMon)) {
+        RECT tr;
+        if (GetWindowRect(hTray, &tr) && tr.bottom > tr.top &&
+            (tr.top + tr.bottom) < (mon.top + mon.bottom)) {
+            dockY = (float)mon.top;
+        }
+    }
+    if (data->isClosing) {
+        const int direction = g_closeDirection.load(std::memory_order_relaxed);
+        if (direction == 0) {
+            dockX = mon.left;
+            dockY = (float)(mon.top + mon.bottom) * 0.5f;
+        } else if (direction == 1) {
+            dockX = mon.right;
+            dockY = (float)(mon.top + mon.bottom) * 0.5f;
+        } else if (direction == 3) {
+            dockX = (mon.left + mon.right) / 2;
+            dockY = (float)mon.bottom;
+        } else {
+            dockX = (mon.left + mon.right) / 2;
+            dockY = (float)mon.top;
+        }
+    }
+    const float dockXf = (float)dockX;
+    const float origBottomF = (float)(origTop + H);
+    const bool dockAbove = dockY < ((float)origTop + origBottomF) * 0.5f;
+    if (dockAbove) { if (dockY > (float)origTop) dockY = (float)origTop; }
+    else           { if (dockY < origBottomF)    dockY = origBottomF; }
+    float neckW = W * 0.03f;
+    if (neckW < 12.0f) neckW = 12.0f;
+    if (neckW > 60.0f) neckW = 60.0f;
 
-        HWND prev = GetWindow(hwnd, GW_HWNDPREV);
-        HWND after = topmost ? HWND_TOPMOST
-                             : (prev ? prev
-                                     : ((GetWindowLongPtrW(hwnd, GWL_EXSTYLE) & WS_EX_TOPMOST)
-                                            ? HWND_TOPMOST
-                                            : HWND_TOP));
+    int boundLeft   = (origLeft < dockX ? origLeft : dockX) - W / 2;
+    int boundRight  = ((origLeft + W) > dockX ? (origLeft + W) : dockX) + W / 2;
+    int boundTop    = std::min<int>(origTop, (int)dockY);
+    int boundBottom = std::max<int>(origTop + H, (int)dockY);
+    RECT monUnion = GetGenieMonitorUnion(data->targetRect, data->hMon);
+    ClampGenieCanvas(boundLeft, boundTop, boundRight, boundBottom, data->targetRect, dockX, monUnion);
+    int boundW = boundRight - boundLeft;
+    int boundH = boundBottom - boundTop;
+    if (boundW < 1) boundW = 1;
+    if (boundH < 1) boundH = 1;
 
-        SetWindowPos(m_overlay, after, m_pos.x, m_pos.y, m_bw, m_bh,
-                     SWP_NOACTIVATE | SWP_SHOWWINDOW);
+    HWND hGhost = CreateWindowExW(
+        WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_TRANSPARENT,
+        L"STATIC", NULL, WS_POPUP,
+        boundLeft, boundTop, boundW, boundH,
+        NULL, NULL, NULL, NULL);
 
-        BOOL on = TRUE;
-        g_api.DwmSetWindowAttribute(hwnd, kDwmTransitionsForceDisabled, &on, sizeof(on));
-        m_transDisabled = true;
+    HDC hScreenDC = GetDC(NULL);
 
-        g_api.DwmFlush();
+    HDC hSrcDC = CreateCompatibleDC(hScreenDC);
+    HBITMAP hOldSrc = (HBITMAP)SelectObject(hSrcDC, data->hBitmap);
+
+    BITMAPINFO sbmi;
+    ZeroMemory(&sbmi, sizeof(sbmi));
+    sbmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    sbmi.bmiHeader.biWidth = W;
+    sbmi.bmiHeader.biHeight = -H;
+    sbmi.bmiHeader.biPlanes = 1;
+    sbmi.bmiHeader.biBitCount = 32;
+    sbmi.bmiHeader.biCompression = BI_RGB;
+    BYTE* srcBits = NULL;
+    HBITMAP hSrcDib = CreateDIBSection(hScreenDC, &sbmi, DIB_RGB_COLORS, (void**)&srcBits, NULL, 0);
+    HDC hSrcDibDC = CreateCompatibleDC(hScreenDC);
+    HBITMAP hOldSrcDib = (HBITMAP)SelectObject(hSrcDibDC, hSrcDib);
+    BitBlt(hSrcDibDC, 0, 0, W, H, hSrcDC, 0, 0, SRCCOPY);
+    GdiFlush();
+    const int srcStride = W * 4;
+
+    BITMAPINFO bmi;
+    ZeroMemory(&bmi, sizeof(bmi));
+    bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    bmi.bmiHeader.biWidth = boundW;
+    bmi.bmiHeader.biHeight = -boundH;
+    bmi.bmiHeader.biPlanes = 1;
+    bmi.bmiHeader.biBitCount = 32;
+    bmi.bmiHeader.biCompression = BI_RGB;
+    BYTE* pBits = NULL;
+    HBITMAP hCanvas = CreateDIBSection(hScreenDC, &bmi, DIB_RGB_COLORS, (void**)&pBits, NULL, 0);
+    HDC hCanvasDC = CreateCompatibleDC(hScreenDC);
+    HBITMAP hOldCanvas = (HBITMAP)SelectObject(hCanvasDC, hCanvas);
+    const int canvasStride = boundW * 4;
+
+    const float SPREAD = 0.65f;
+    const size_t canvasBytes = (size_t)boundW * 4 * boundH;
+
+    const double totalMs = (double)data->durationMs;
+
+    auto morphAt = [&](float v, float tt) -> float {
+        float m = tt * (1.0f + SPREAD) - (1.0f - v) * SPREAD;
+        if (m < 0.0f) m = 0.0f;
+        if (m > 1.0f) m = 1.0f;
+        return m * m * (3.0f - 2.0f * m);
+    };
+
+    float* yb = new float[H + 1];
+
+    LARGE_INTEGER qpcFreq, qpcStart, qpcNow;
+    QueryPerformanceFrequency(&qpcFreq);
+    QueryPerformanceCounter(&qpcStart);
+
+    double frameIntervalMs = 1000.0 / 240.0;
+    DWM_TIMING_INFO ti = { sizeof(ti) };
+    if (SUCCEEDED(DwmGetCompositionTimingInfo(NULL, &ti)) && ti.rateRefresh.uiDenominator) {
+        double hz = (double)ti.rateRefresh.uiNumerator / ti.rateRefresh.uiDenominator;
+        frameIntervalMs = 1000.0 / (hz * 2.0);
+    }
+    HANDLE hFrameTimer = CreateWaitableTimerExW(
+        nullptr, nullptr, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION,
+        TIMER_MODIFY_STATE | SYNCHRONIZE);
+    if (!hFrameTimer) {
+        hFrameTimer = CreateWaitableTimerExW(nullptr, nullptr, 0, TIMER_MODIFY_STATE | SYNCHRONIZE);
+    }
+
+    BOOL firstFrame = TRUE;
+    for (;;) {
+        QueryPerformanceCounter(&qpcNow);
+        const LARGE_INTEGER qpcFrameStart = qpcNow;
+        double elapsedMs = (qpcNow.QuadPart - qpcStart.QuadPart) * 1000.0 / qpcFreq.QuadPart;
+        BOOL lastFrame = (elapsedMs >= totalMs);
+        float progress = lastFrame ? 1.0f : (float)(elapsedMs / totalMs);
+
+        float eased_progress = MacGenieEase(data->isRising ? g_easeRestore.load(std::memory_order_relaxed)
+                                                           : g_easeMinimize.load(std::memory_order_relaxed),
+                                            progress);
+
+        float tt = data->isRising ? (1.0f - eased_progress) : eased_progress;
+
+        float fade = 1.0f;
+        if (tt > 0.8f) fade = (1.0f - tt) / 0.2f;
+        if (fade < 0.0f) fade = 0.0f;
+        if (fade > 1.0f) fade = 1.0f;
+
+        memset(pBits, 0, canvasBytes);
+
+        for (int k = 0; k <= H; ++k) {
+            float v = (float)k / (float)H;
+            float e = morphAt(dockAbove ? (1.0f - v) : v, tt);
+            float idY = (float)origTop + (float)H * v;
+            yb[k] = idY + (dockY - idY) * e;
+        }
+
+        int kSeg = 0;
+        for (int yC = 0; yC < boundH; ++yC) {
+            float screenY = (float)(yC + boundTop) + 0.5f;
+            if (screenY < yb[0] || screenY >= yb[H]) continue;
+
+            while (kSeg < H - 1 && yb[kSeg + 1] <= screenY) kSeg++;
+            float segH = yb[kSeg + 1] - yb[kSeg];
+            float frac = segH > 1e-4f ? (screenY - yb[kSeg]) / segH : 0.0f;
+            float v = ((float)kSeg + frac) / (float)H;
+
+            float em = morphAt(dockAbove ? (1.0f - v) : v, tt);
+            float width = (float)W + (neckW - (float)W) * em;
+            if (width < 1.0f) width = 1.0f;
+            float cx = origCenterX + (dockXf - origCenterX) * em;
+            float leftCanvas = (cx - width * 0.5f) - (float)boundLeft;
+
+            int srcRow = (int)(v * (float)H);
+            if (srcRow < 0) srcRow = 0;
+            if (srcRow > H - 1) srcRow = H - 1;
+            const BYTE* srcRowPtr = srcBits + (size_t)srcRow * srcStride;
+            BYTE* dstRowPtr = pBits + (size_t)yC * canvasStride;
+
+            int xStart = (int)leftCanvas;
+            int xEnd   = (int)(leftCanvas + width) + 1;
+            if (xStart < 0) xStart = 0;
+            if (xEnd > boundW) xEnd = boundW;
+
+            float invW = 1.0f / width;
+            for (int xC = xStart; xC < xEnd; ++xC) {
+                float u = ((float)xC + 0.5f - leftCanvas) * invW;
+                if (u < 0.0f || u >= 1.0f) continue;
+                int srcX = (int)(u * (float)W);
+                if (srcX < 0) srcX = 0;
+                if (srcX > W - 1) srcX = W - 1;
+                const BYTE* sp = srcRowPtr + (size_t)srcX * 4;
+                BYTE* dp = dstRowPtr + (size_t)xC * 4;
+                dp[0] = sp[0];
+                dp[1] = sp[1];
+                dp[2] = sp[2];
+                dp[3] = sp[3];
+            }
+        }
+
+        POINT ptDst = { boundLeft, boundTop };
+        SIZE  sz    = { boundW, boundH };
+        POINT ptSrc = { 0, 0 };
+        BLENDFUNCTION bf;
+        bf.BlendOp = AC_SRC_OVER;
+        bf.BlendFlags = 0;
+        bf.SourceConstantAlpha = (BYTE)(255.0f * fade);
+        bf.AlphaFormat = AC_SRC_ALPHA;
+        UpdateLayeredWindow(hGhost, hScreenDC, &ptDst, &sz, hCanvasDC, &ptSrc, 0, &bf, ULW_ALPHA);
+
+        if (firstFrame) {
+            ShowWindow(hGhost, SW_SHOWNOACTIVATE);
+        }
+
+        if (lastFrame) break;
+        if (g_unloading.load(std::memory_order_relaxed)) break;
+
+        if (firstFrame) {
+            DwmFlush();
+            firstFrame = FALSE;
+            if (data->hFirstFrameShown) SetEvent(data->hFirstFrameShown);
+        }
+
+        if (hFrameTimer) {
+            LARGE_INTEGER qpcAfter;
+            QueryPerformanceCounter(&qpcAfter);
+            double spentMs = (qpcAfter.QuadPart - qpcFrameStart.QuadPart) * 1000.0 / qpcFreq.QuadPart;
+            double waitMs = frameIntervalMs - spentMs;
+            if (waitMs > 0.1) {
+                LARGE_INTEGER due;
+                due.QuadPart = -(LONGLONG)(waitMs * 10000.0);
+                SetWaitableTimer(hFrameTimer, &due, 0, nullptr, nullptr, FALSE);
+                WaitForSingleObject(hFrameTimer, 100);
+            } else {
+                SwitchToThread();
+            }
+        } else {
+            Sleep(1);
+        }
+    }
+
+    if (hFrameTimer) { CloseHandle(hFrameTimer); hFrameTimer = nullptr; }
+
+    if (data->isRising) {
+        if (data->hiddenByCloak) {
+            MacGenieSetCloak(data->hRealWnd, FALSE);
+        } else {
+            SetLayeredWindowAttributes(data->hRealWnd, 0, 255, LWA_ALPHA);
+            if (!(data->originalExStyle & WS_EX_LAYERED)) {
+                SetWindowLongPtrW(data->hRealWnd, GWL_EXSTYLE, data->originalExStyle);
+            }
+        }
+    }
+
+    if (!data->deferredMinimize && !data->isClosing) {
+        MacGenieSetDwmTransitions(data->hRealWnd, TRUE);
+    }
+    if (data->isClosing) MacGenieFinishClose(data);
+
+    delete[] yb;
+    SelectObject(hCanvasDC, hOldCanvas);
+    SelectObject(hSrcDibDC, hOldSrcDib);
+    SelectObject(hSrcDC, hOldSrc);
+    DeleteObject(hCanvas);
+    DeleteObject(hSrcDib);
+    DeleteObject(data->hBitmap);
+    DeleteDC(hCanvasDC);
+    DeleteDC(hSrcDibDC);
+    DeleteDC(hSrcDC);
+    ReleaseDC(NULL, hScreenDC);
+    DestroyWindow(hGhost);
+
+    if (data->hFirstFrameShown) {
+        SetEvent(data->hFirstFrameShown);
+        CloseHandle(data->hFirstFrameShown);
+    }
+
+    if (data->deferredMinimize) {
+        int unhideMs = data->unhideDurationMs;
+        int animMs = data->durationMs;
+        if (data->requestedUnhide && unhideMs > animMs) {
+            int remaining = unhideMs - animMs;
+            while (remaining > 0 && !g_unloading.load(std::memory_order_relaxed)) {
+                int chunk = remaining < 20 ? remaining : 20;
+                Sleep(chunk);
+                remaining -= chunk;
+            }
+        }
+        if (!g_unloading.load(std::memory_order_relaxed) && IsWindow(data->hRealWnd)) {
+            SetPropW(data->hRealWnd, L"GenieBypass", (HANDLE)1);
+            SendMessageTimeoutW(data->hRealWnd, WM_SYSCOMMAND, SC_MINIMIZE, 0, SMTO_NORMAL, 1000, NULL);
+            RemovePropW(data->hRealWnd, L"GenieBypass");
+        }
+        if (IsWindow(data->hRealWnd)) {
+            MacGenieSetCloak(data->hRealWnd, FALSE);
+            MacGenieSetDwmTransitions(data->hRealWnd, TRUE);
+        }
+        if (data->requestedUnhide && !g_unloading.load(std::memory_order_relaxed)) {
+            if (data->hNextApp && IsWindow(data->hNextApp) && IsWindowVisible(data->hNextApp)) {
+                SetForegroundWindow(data->hNextApp);
+            } else {
+                SetForegroundWindow(FindWindowW(L"Progman", NULL));
+            }
+        }
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(g_CacheMutex);
+        g_AnimActive.erase(data->hRealWnd);
+    }
+    delete data;
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
+// Shared helpers: frame pacing, Windows 11 corner rounding
+// ---------------------------------------------------------------------------
+static double MacGenieFrameIntervalMs() {
+    double frameIntervalMs = 1000.0 / 240.0;
+    DWM_TIMING_INFO ti = { sizeof(ti) };
+    if (SUCCEEDED(DwmGetCompositionTimingInfo(NULL, &ti)) && ti.rateRefresh.uiDenominator) {
+        double hz = (double)ti.rateRefresh.uiNumerator / ti.rateRefresh.uiDenominator;
+        if (hz > 1.0) frameIntervalMs = 1000.0 / (hz * 2.0);
+    }
+    return frameIntervalMs;
+}
+
+static HANDLE MacGenieCreateFrameTimer() {
+    HANDLE h = CreateWaitableTimerExW(nullptr, nullptr, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION,
+                                      TIMER_MODIFY_STATE | SYNCHRONIZE);
+    if (!h) h = CreateWaitableTimerExW(nullptr, nullptr, 0, TIMER_MODIFY_STATE | SYNCHRONIZE);
+    return h;
+}
+
+static void MacGenieWaitNextFrame(HANDLE hTimer, double intervalMs,
+                                  const LARGE_INTEGER& frameStart, const LARGE_INTEGER& freq) {
+    if (!hTimer) { Sleep(1); return; }
+    LARGE_INTEGER now;
+    QueryPerformanceCounter(&now);
+    double spentMs = (now.QuadPart - frameStart.QuadPart) * 1000.0 / freq.QuadPart;
+    double waitMs = intervalMs - spentMs;
+    if (waitMs > 0.1) {
+        LARGE_INTEGER due;
+        due.QuadPart = -(LONGLONG)(waitMs * 10000.0);
+        SetWaitableTimer(hTimer, &due, 0, nullptr, nullptr, FALSE);
+        WaitForSingleObject(hTimer, 100);
+    } else {
+        SwitchToThread();
+    }
+}
+
+static bool MacGenieIsWindows11() {
+    static const bool isWin11 = [] {
+        typedef LONG (WINAPI *RtlGetVersion_t)(OSVERSIONINFOW*);
+        HMODULE hNt = GetModuleHandleW(L"ntdll.dll");
+        RtlGetVersion_t fn = hNt ? (RtlGetVersion_t)(void*)GetProcAddress(hNt, "RtlGetVersion") : nullptr;
+        OSVERSIONINFOW vi = {};
+        vi.dwOSVersionInfoSize = sizeof(vi);
+        return fn && fn(&vi) == 0 && vi.dwBuildNumber >= 22000;
+    }();
+    return isWin11;
+}
+
+static UINT MacGenieWindowDpi(HWND hWnd) {
+    typedef UINT (WINAPI *GetDpiForWindow_t)(HWND);
+    static GetDpiForWindow_t fn = [] {
+        HMODULE h = GetModuleHandleW(L"user32.dll");
+        return h ? (GetDpiForWindow_t)(void*)GetProcAddress(h, "GetDpiForWindow") : nullptr;
+    }();
+    UINT dpi = fn ? fn(hWnd) : 0;
+    return dpi ? dpi : 96;
+}
+
+static void MacGenieScalePixel(DWORD& px, float coverage) {
+    // Premultiplied BGRA: scaling every channel keeps the pixel valid.
+    DWORD a = (DWORD)(((px >> 24) & 0xFF) * coverage + 0.5f);
+    DWORD r = (DWORD)(((px >> 16) & 0xFF) * coverage + 0.5f);
+    DWORD g = (DWORD)(((px >> 8) & 0xFF) * coverage + 0.5f);
+    DWORD b = (DWORD)((px & 0xFF) * coverage + 0.5f);
+    px = (a << 24) | (r << 16) | (g << 8) | b;
+}
+
+// Windows 11 rounds the corners at composition time, so PrintWindow hands back square
+// corners. Bake the rounding into the snapshot's alpha so it travels with the animation.
+static void MacGenieRoundSnapshotCorners(HWND hWnd, DWORD* px, int w, int h) {
+    if (!g_roundCorners.load(std::memory_order_relaxed) || !MacGenieIsWindows11()) return;
+    if (IsZoomed(hWnd) || w < 64 || h < 64) return;
+
+    int pref = 0;   // DWMWCP_DEFAULT
+    DwmGetWindowAttribute(hWnd, DWMWA_WINDOW_CORNER_PREFERENCE, &pref, sizeof(pref));
+    if (pref == 1) return;                                  // DWMWCP_DONOTROUND
+    float radius = (pref == 3 ? 4.0f : 8.0f) * (float)MacGenieWindowDpi(hWnd) / 96.0f;
+
+    // Already transparent in the corner? DWM gave us rounding, nothing to do.
+    if (((px[0] >> 24) & 0xFF) < 250) return;
+
+    // Full-screen / borderless-maximized windows are not rounded.
+    MONITORINFO mi = {};
+    mi.cbSize = sizeof(mi);
+    RECT wr;
+    if (GetWindowRect(hWnd, &wr) && GetMonitorInfoW(MonitorFromWindow(hWnd, MONITOR_DEFAULTTONEAREST), &mi)) {
+        if (wr.left <= mi.rcMonitor.left && wr.top <= mi.rcMonitor.top &&
+            wr.right >= mi.rcMonitor.right && wr.bottom >= mi.rcMonitor.bottom) return;
+    }
+
+    const int ri = (int)ceilf(radius);
+    if (w < ri * 2 || h < ri * 2) return;
+    for (int cy = 0; cy < ri; ++cy) {
+        for (int cx = 0; cx < ri; ++cx) {
+            float dx = radius - (cx + 0.5f);
+            float dy = radius - (cy + 0.5f);
+            float cov = radius - sqrtf(dx * dx + dy * dy) + 0.5f;
+            if (cov >= 1.0f) continue;
+            if (cov < 0.0f) cov = 0.0f;
+            MacGenieScalePixel(px[cy * w + cx], cov);
+            MacGenieScalePixel(px[cy * w + (w - 1 - cx)], cov);
+            MacGenieScalePixel(px[(h - 1 - cy) * w + cx], cov);
+            MacGenieScalePixel(px[(h - 1 - cy) * w + (w - 1 - cx)], cov);
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// POP engine: the real macOS open / close look - the window scales slightly and
+// fades. Used for app launch and window close (Genie is optional for both).
+// ---------------------------------------------------------------------------
+DWORD WINAPI MacGeniePopThread(LPVOID lpParam) {
+    MacGenieAnimData* data = (MacGenieAnimData*)lpParam;
+    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST);
+
+    const int W = data->width;
+    const int H = data->height;
+    const float minScale = data->popScale;
+    const float maxScale = fmaxf(1.0f, minScale);
+    const int padX = (int)ceilf(W * (maxScale - 1.0f) * 0.5f) + 2;
+    const int padY = (int)ceilf(H * (maxScale - 1.0f) * 0.5f) + 2;
+    const int vLeft = data->targetRect.left - padX;
+    const int vTop = data->targetRect.top - padY;
+    const int vWidth = W + padX * 2;
+    const int vHeight = H + padY * 2;
+
+    HDC hScreenDC = GetDC(NULL);
+    HDC hMemDC = CreateCompatibleDC(hScreenDC);
+
+    BITMAPINFO bmi = {};
+    bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    bmi.bmiHeader.biWidth = vWidth;
+    bmi.bmiHeader.biHeight = -vHeight;
+    bmi.bmiHeader.biPlanes = 1;
+    bmi.bmiHeader.biBitCount = 32;
+    bmi.bmiHeader.biCompression = BI_RGB;
+    void* pTargetBits = nullptr;
+    HBITMAP hTargetBmp = CreateDIBSection(hScreenDC, &bmi, DIB_RGB_COLORS, &pTargetBits, NULL, 0);
+    HBITMAP hOldBmp = (HBITMAP)SelectObject(hMemDC, hTargetBmp);
+
+    HWND hGhost = CreateWindowExW(
+        WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE,
+        L"STATIC", NULL, WS_POPUP,
+        vLeft, vTop, vWidth, vHeight,
+        NULL, NULL, NULL, NULL);
+
+    ID2D1DCRenderTarget* rt = nullptr;
+    ID2D1Bitmap* snapshotBmp = nullptr;
+    if (g_d2dFactory) {
+        D2D1_RENDER_TARGET_PROPERTIES rtProps = D2D1::RenderTargetProperties(
+            D2D1_RENDER_TARGET_TYPE_DEFAULT,
+            D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED),
+            0, 0, D2D1_RENDER_TARGET_USAGE_GDI_COMPATIBLE, D2D1_FEATURE_LEVEL_DEFAULT);
+        g_d2dFactory->CreateDCRenderTarget(&rtProps, &rt);
+        if (rt) {
+            D2D1_BITMAP_PROPERTIES bmpProps = D2D1::BitmapProperties(
+                D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED));
+            rt->CreateBitmap(D2D1::SizeU(W, H), data->pBits, W * 4, bmpProps, &snapshotBmp);
+        }
+    }
+    const bool d2dOk = (rt && snapshotBmp && hGhost);
+
+    const double animDur = (double)data->durationMs;
+    LARGE_INTEGER qpcFreq, qpcStart, qpcNow;
+    QueryPerformanceFrequency(&qpcFreq);
+    QueryPerformanceCounter(&qpcStart);
+    const double frameIntervalMs = MacGenieFrameIntervalMs();
+    HANDLE hFrameTimer = MacGenieCreateFrameTimer();
+    const D2D1_POINT_2F center = D2D1::Point2F(padX + W * 0.5f, padY + H * 0.5f);
+    const D2D1_RECT_F dest = D2D1::RectF((float)padX, (float)padY, (float)(padX + W), (float)(padY + H));
+    BOOL firstFrame = TRUE;
+
+    if (d2dOk) {
+        for (;;) {
+            QueryPerformanceCounter(&qpcNow);
+            const LARGE_INTEGER qpcFrameStart = qpcNow;
+            double elapsedMs = (qpcNow.QuadPart - qpcStart.QuadPart) * 1000.0 / qpcFreq.QuadPart;
+            const BOOL lastFrame = (elapsedMs >= animDur);
+            const float raw = (float)fmin(elapsedMs / animDur, 1.0);
+
+            float scale, alpha;
+            if (data->isClosing) {
+                // Shrink quickly, fade with a gentle in-out so the window lingers briefly.
+                scale = 1.0f - (1.0f - minScale) * MacGenieEase(2, raw);
+                alpha = 1.0f - MacGenieEase(1, raw);
+            } else {
+                // Open: settle out of the smaller size; opacity arrives a bit faster than size.
+                scale = minScale + (1.0f - minScale) * MacGenieEase(2, raw);
+                alpha = MacGenieEase(2, fminf(raw * 1.6f, 1.0f));
+            }
+            if (alpha < 0.0f) alpha = 0.0f;
+            if (alpha > 1.0f) alpha = 1.0f;
+
+            RECT bindRect = { 0, 0, vWidth, vHeight };
+            rt->BindDC(hMemDC, &bindRect);
+            rt->BeginDraw();
+            rt->Clear(D2D1::ColorF(0, 0, 0, 0));
+            rt->SetTransform(D2D1::Matrix3x2F::Scale(scale, scale, center));
+            rt->DrawBitmap(snapshotBmp, dest, alpha, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR);
+            rt->SetTransform(D2D1::Matrix3x2F::Identity());
+            rt->EndDraw();
+
+            POINT ptDst = { vLeft, vTop };
+            SIZE sz = { vWidth, vHeight };
+            POINT ptSrc = { 0, 0 };
+            BLENDFUNCTION bf = { AC_SRC_OVER, 0, 255, AC_SRC_ALPHA };
+            UpdateLayeredWindow(hGhost, hScreenDC, &ptDst, &sz, hMemDC, &ptSrc, 0, &bf, ULW_ALPHA);
+            if (firstFrame) ShowWindow(hGhost, SW_SHOWNOACTIVATE);
+
+            if (lastFrame) break;
+            if (g_unloading.load(std::memory_order_relaxed)) break;
+
+            if (firstFrame) {
+                DwmFlush();
+                firstFrame = FALSE;
+                if (data->hFirstFrameShown) SetEvent(data->hFirstFrameShown);
+            }
+            MacGenieWaitNextFrame(hFrameTimer, frameIntervalMs, qpcFrameStart, qpcFreq);
+        }
+    }
+
+    if (hFrameTimer) { CloseHandle(hFrameTimer); hFrameTimer = nullptr; }
+
+    if (data->isRising) {
+        if (data->hiddenByCloak) {
+            MacGenieSetCloak(data->hRealWnd, FALSE);
+        } else {
+            SetLayeredWindowAttributes(data->hRealWnd, 0, 255, LWA_ALPHA);
+            if (!(data->originalExStyle & WS_EX_LAYERED)) {
+                SetWindowLongPtrW(data->hRealWnd, GWL_EXSTYLE, data->originalExStyle);
+            }
+        }
+    }
+    if (!data->isClosing) MacGenieSetDwmTransitions(data->hRealWnd, TRUE);
+    if (data->isClosing) MacGenieFinishClose(data);
+
+    if (snapshotBmp) { snapshotBmp->Release(); snapshotBmp = nullptr; }
+    if (rt) { rt->Release(); rt = nullptr; }
+    SelectObject(hMemDC, hOldBmp);
+    DeleteObject(hTargetBmp);
+    DeleteObject(data->hBitmap);
+    DeleteDC(hMemDC);
+    ReleaseDC(NULL, hScreenDC);
+    if (hGhost) DestroyWindow(hGhost);
+
+    if (data->hFirstFrameShown) {
+        SetEvent(data->hFirstFrameShown);
+        CloseHandle(data->hFirstFrameShown);
+    }
+    {
+        std::lock_guard<std::mutex> lock(g_CacheMutex);
+        g_AnimActive.erase(data->hRealWnd);
+    }
+    delete data;
+    return 0;
+}
+
+bool StartMacGenieAnim(HWND hWnd, BOOL rising, LONG_PTR originalExStyle,
+                       BOOL cloakHidden = FALSE, BOOL deferredMinimize = FALSE,
+                       BOOL requestedUnhide = FALSE, HWND hNextApp = NULL,
+                       BOOL isClosing = FALSE, UINT closeMsg = WM_DESTROY,
+                       BOOL isLaunch = FALSE) {
+    {
+        std::lock_guard<std::mutex> lock(g_CacheMutex);
+        for (auto it = g_SnapshotCache.begin(); it != g_SnapshotCache.end();) {
+            if (!IsWindow(it->first)) {
+                DeleteObject(it->second.hBmp);
+                it = g_SnapshotCache.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    }
+
+    if (MacGenieIsExcluded(hWnd)) {
+        if (rising) MacGenieUndoRisingHide(hWnd, originalExStyle, cloakHidden);
+        else MacGenieSetDwmTransitions(hWnd, TRUE);
+        return false;
+    }
+
+    RECT winRect;
+    if (!GetWindowRect(hWnd, &winRect)) {
+        if (rising) MacGenieUndoRisingHide(hWnd, originalExStyle, cloakHidden);
+        else MacGenieSetDwmTransitions(hWnd, TRUE);
+        return false;
+    }
+    RECT rect = winRect, extRect;
+    if (SUCCEEDED(DwmGetWindowAttribute(hWnd, DWMWA_EXTENDED_FRAME_BOUNDS, &extRect, sizeof(extRect)))) {
+        rect = extRect;
+    }
+    int w = rect.right - rect.left;
+    int h = rect.bottom - rect.top;
+    int offsetX = rect.left - winRect.left;
+    int offsetY = rect.top - winRect.top;
+    int rawW = winRect.right - winRect.left;
+    int rawH = winRect.bottom - winRect.top;
+
+    if (w <= 0 || h <= 0 || rawW <= 0 || rawH <= 0) {
+        if (rising) MacGenieUndoRisingHide(hWnd, originalExStyle, cloakHidden);
+        else MacGenieSetDwmTransitions(hWnd, TRUE);
+        return false;
+    }
+
+    bool blocked = g_unloading.load(std::memory_order_relaxed);
+    if (!blocked) {
+        std::lock_guard<std::mutex> lock(g_CacheMutex);
+        blocked = !g_AnimActive.insert(hWnd).second;
+        if (!blocked) g_LaunchSeen.insert(hWnd);
+    }
+    if (blocked) {
+        if (rising) {
+            MacGenieUndoRisingHide(hWnd, originalExStyle, cloakHidden);
+        } else {
+            bool owned;
+            {
+                std::lock_guard<std::mutex> lock(g_CacheMutex);
+                owned = g_AnimActive.count(hWnd) != 0;
+            }
+            if (!owned) MacGenieSetDwmTransitions(hWnd, TRUE);
+        }
+        return false;
+    }
+
+    // 0 = genie (mesh warp into the taskbar / screen edge), 1 = pop (scale + fade).
+    // Minimize and restore are always genie.
+    int style = 0;
+    if (isClosing) style = g_closeStyle.load(std::memory_order_relaxed);
+    else if (isLaunch) style = g_launchStyle.load(std::memory_order_relaxed);
+
+    bool multiMon = isClosing || g_multiMonitor.load(std::memory_order_relaxed);
+    HMONITOR hMon = multiMon
+        ? MonitorFromWindow(hWnd, MONITOR_DEFAULTTONEAREST)
+        : MonitorFromPoint(POINT{0, 0}, MONITOR_DEFAULTTOPRIMARY);
+    MONITORINFO mi;
+    mi.cbSize = sizeof(mi);
+    if (!GetMonitorInfoW(hMon, &mi)) {
+        mi.rcMonitor.left = 0; mi.rcMonitor.top = 0;
+        mi.rcMonitor.right = GetSystemMetrics(SM_CXSCREEN);
+        mi.rcMonitor.bottom = GetSystemMetrics(SM_CYSCREEN);
+    }
+    int monWidth = mi.rcMonitor.right - mi.rcMonitor.left;
+
+    int learnedTargetX = mi.rcMonitor.left + monWidth / 2;
+    if (!isClosing && style == 0) {
+        DWORD alignVal = 1, dataSize = sizeof(alignVal);
+        RegGetValueW(HKEY_CURRENT_USER,
+                     L"Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced",
+                     L"TaskbarAl", RRF_RT_REG_DWORD, NULL, &alignVal, &dataSize);
+        learnedTargetX = (alignVal == 0) ? (mi.rcMonitor.left + 160)
+                                         : (mi.rcMonitor.left + monWidth / 2);
+
+        POINT pt;
+        GetCursorPos(&pt);
+        RECT workArea;
+        MONITORINFO cursorMi;
+        cursorMi.cbSize = sizeof(cursorMi);
+        if (GetMonitorInfoW(MonitorFromPoint(pt, MONITOR_DEFAULTTONEAREST), &cursorMi)) {
+            workArea = cursorMi.rcWork;
+        } else {
+            SystemParametersInfoW(SPI_GETWORKAREA, 0, &workArea, 0);
+        }
+
+        if (!PtInRect(&workArea, pt)) {
+            learnedTargetX = pt.x;
+            std::lock_guard<std::mutex> lock(g_CacheMutex);
+            g_IconPositions[hWnd] = learnedTargetX;
+        } else {
+            learnedTargetX = GetTaskbarButtonX(hWnd, learnedTargetX, hMon);
+        }
+    }
+
+    MacGenieAnimData* data = new MacGenieAnimData();
+    data->hRealWnd = hWnd;
+    data->targetRect = rect;
+    data->hMon = hMon;
+    data->width = w;
+    data->height = h;
+    data->isRising = rising;
+    data->targetDockX = learnedTargetX;
+    data->originalExStyle = originalExStyle;
+    data->hiddenByCloak = cloakHidden;
+    data->hFirstFrameShown = NULL;
+    int durationMs = (style == 1)
+        ? (isClosing ? g_popCloseMs.load(std::memory_order_relaxed)
+                     : g_popOpenMs.load(std::memory_order_relaxed))
+        : g_durationMs.load(std::memory_order_relaxed);
+    // macOS: holding Shift plays the genie in slow motion.
+    if (style == 0 && g_slowMoShift.load(std::memory_order_relaxed) &&
+        (GetAsyncKeyState(VK_SHIFT) & 0x8000)) {
+        durationMs *= g_slowMoFactor.load(std::memory_order_relaxed);
+        if (durationMs > 20000) durationMs = 20000;
+    }
+    data->durationMs = durationMs;
+    data->style = style;
+    data->popScale = g_popScalePct.load(std::memory_order_relaxed) / 100.0f;
+    data->requestedUnhide = requestedUnhide;
+    data->hNextApp = hNextApp;
+    data->unhideDurationMs = g_unhideDurationMs.load(std::memory_order_relaxed);
+    data->deferredMinimize = deferredMinimize;
+    data->isClosing = isClosing;
+    data->closeMsg = closeMsg;
+    data->pBits = nullptr;
+    data->hBitmap = NULL;
+
+    HDC hScreenDC = GetDC(NULL);
+
+    BITMAPINFO bmi = {{0}};
+    bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    bmi.bmiHeader.biWidth = w;
+    bmi.bmiHeader.biHeight = -h;
+    bmi.bmiHeader.biPlanes = 1;
+    bmi.bmiHeader.biBitCount = 32;
+    bmi.bmiHeader.biCompression = BI_RGB;
+    data->hBitmap = CreateDIBSection(hScreenDC, &bmi, DIB_RGB_COLORS, &data->pBits, NULL, 0);
+
+    if (!data->hBitmap || !data->pBits) {
+        ReleaseDC(NULL, hScreenDC);
+        if (rising) MacGenieUndoRisingHide(hWnd, originalExStyle, cloakHidden);
+        else MacGenieSetDwmTransitions(hWnd, TRUE);
+        if (data->hBitmap) DeleteObject(data->hBitmap);
+        delete data;
+        std::lock_guard<std::mutex> lock(g_CacheMutex);
+        g_AnimActive.erase(hWnd);
+        return false;
+    }
+
+    auto CopySnapshot = [&](void* srcBits) {
+        DWORD* src = (DWORD*)srcBits;
+        DWORD* dst = (DWORD*)data->pBits;
+        int inBounds = 0, zeroAlpha = 0;
+        for (int y = 0; y < h; y++) {
+            for (int x = 0; x < w; x++) {
+                int sx = x + offsetX;
+                int sy = y + offsetY;
+                if (sx >= 0 && sx < rawW && sy >= 0 && sy < rawH) {
+                    DWORD p = src[sy * rawW + sx];
+                    BYTE a = (BYTE)((p >> 24) & 0xFF);
+                    inBounds++;
+                    if (a == 0) zeroAlpha++;
+                    dst[y * w + x] = (a == 0) ? 0 : p;
+                } else {
+                    dst[y * w + x] = 0;
+                }
+            }
+        }
+        if (inBounds > 0 && zeroAlpha * 2 > inBounds) {
+            for (int y = 0; y < h; y++) {
+                for (int x = 0; x < w; x++) {
+                    int sx = x + offsetX;
+                    int sy = y + offsetY;
+                    if (sx >= 0 && sx < rawW && sy >= 0 && sy < rawH) {
+                        DWORD p = src[sy * rawW + sx];
+                        if (((p >> 24) & 0xFF) == 0) {
+                            dst[y * w + x] = 0xFF000000u | (p & 0x00FFFFFFu);
+                        }
+                    }
+                }
+            }
+        }
+    };
+
+    auto CaptureNow = [&]() -> bool {
+        HDC hTempDC = CreateCompatibleDC(hScreenDC);
+        BITMAPINFO bmiTemp = bmi;
+        bmiTemp.bmiHeader.biWidth = rawW;
+        bmiTemp.bmiHeader.biHeight = -rawH;
+        void* pTempBits = nullptr;
+        HBITMAP hTempBmp = CreateDIBSection(hScreenDC, &bmiTemp, DIB_RGB_COLORS, &pTempBits, NULL, 0);
+        if (!hTempBmp || !pTempBits) {
+            if (hTempBmp) DeleteObject(hTempBmp);
+            DeleteDC(hTempDC);
+            return false;
+        }
+        HBITMAP hOldTempBmp = (HBITMAP)SelectObject(hTempDC, hTempBmp);
+        BOOL screenGrab = isClosing && GetForegroundWindow() == hWnd &&
+                          BitBlt(hTempDC, 0, 0, rawW, rawH, hScreenDC,
+                                 winRect.left, winRect.top, SRCCOPY);
+        if (!screenGrab) PrintWindow(hWnd, hTempDC, PW_RENDERFULLCONTENT);
+        GdiFlush();
+        CopySnapshot(pTempBits);
+        MacGenieRoundSnapshotCorners(hWnd, (DWORD*)data->pBits, w, h);
+        SelectObject(hTempDC, hOldTempBmp);
+        DeleteObject(hTempBmp);
+        DeleteDC(hTempDC);
+        return true;
+    };
+
+    if (rising) {
+        BOOL fromCache = FALSE;
+        {
+            std::lock_guard<std::mutex> lock(g_CacheMutex);
+            auto it = g_SnapshotCache.find(hWnd);
+            if (it != g_SnapshotCache.end()) {
+                SnapCache& c = it->second;
+                if (c.w == w && c.h == h) {
+                    memcpy(data->pBits, c.pBits, (size_t)w * h * 4);
+                    fromCache = TRUE;
+                }
+                DeleteObject(c.hBmp);
+                g_SnapshotCache.erase(it);
+            }
+        }
+        if (!fromCache) CaptureNow();
+    } else {
+        CaptureNow();
+        std::lock_guard<std::mutex> lock(g_CacheMutex);
+        auto it = g_SnapshotCache.find(hWnd);
+        if (it != g_SnapshotCache.end()) {
+            DeleteObject(it->second.hBmp);
+            g_SnapshotCache.erase(it);
+        }
+        void* pCacheBits = nullptr;
+        HBITMAP hCacheBmp = (isClosing || g_unloading.load(std::memory_order_relaxed)) ? NULL :
+            CreateDIBSection(hScreenDC, &bmi, DIB_RGB_COLORS, &pCacheBits, NULL, 0);
+        if (hCacheBmp && pCacheBits) {
+            memcpy(pCacheBits, data->pBits, (size_t)w * h * 4);
+            g_SnapshotCache[hWnd] = { hCacheBmp, pCacheBits, w, h };
+        } else if (hCacheBmp) {
+            DeleteObject(hCacheBmp);
+        }
+    }
+
+    ReleaseDC(NULL, hScreenDC);
+
+    HANDLE hFirstShown = NULL;
+    if (!rising) {
+        hFirstShown = CreateEventW(NULL, TRUE, FALSE, NULL);
+        if (hFirstShown &&
+            !DuplicateHandle(GetCurrentProcess(), hFirstShown, GetCurrentProcess(),
+                             &data->hFirstFrameShown, 0, FALSE, DUPLICATE_SAME_ACCESS)) {
+            data->hFirstFrameShown = NULL;
+        }
+    }
+    bool waitForFirstFrame = (data->hFirstFrameShown != NULL);
+
+    LPTHREAD_START_ROUTINE renderProc =
+        (style == 1) ? MacGeniePopThread
+                     : (g_classicEngine.load(std::memory_order_relaxed) ? MacGenieAnimThreadClassic
+                                                                        : MacGenieAnimThread);
+    if (MacGenieSpawnWorker(renderProc, data)) {
+        if (hFirstShown) {
+            if (waitForFirstFrame) {
+                WaitForSingleObject(hFirstShown, 200);
+            }
+            CloseHandle(hFirstShown);
+        }
         return true;
     }
 
-    void Play() {
-        if (!m_overlay) return;
-
-        LARGE_INTEGER freq, wall0, now;
-        QueryPerformanceFrequency(&freq);
-        QueryPerformanceCounter(&wall0);
-
-        const double fq = (double)freq.QuadPart;
-        const double durMs = (double)DurationMs();
-
-        HANDLE th = GetCurrentThread();
-        const int oldPrio = GetThreadPriority(th);
-        SetThreadPriority(th, THREAD_PRIORITY_HIGHEST);
-
-        HANDLE mm = nullptr;
-        if (g_api.AvSetMmThreadCharacteristicsW) {
-            DWORD idx = 0;
-            mm = g_api.AvSetMmThreadCharacteristicsW(L"Playback", &idx);
-        }
-
-        long long t0 = 0, lastPresent = -1;
-        bool haveT0 = false;
-
-        for (;;) {
-            if (FAILED(g_api.DwmFlush())) Sleep(4);
-            QueryPerformanceCounter(&now);
-
-            long long present = now.QuadPart;
-
-            if (g_api.DwmGetCompositionTimingInfo) {
-                DWM_TIMING_INFO ti = {};
-                ti.cbSize = sizeof(ti);
-
-                if (SUCCEEDED(g_api.DwmGetCompositionTimingInfo(nullptr, &ti)) &&
-                    ti.qpcRefreshPeriod > 0 && ti.qpcVBlank > 0) {
-                    const double period = (double)ti.qpcRefreshPeriod;
-                    const double k =
-                        std::floor(((double)now.QuadPart - (double)ti.qpcVBlank) / period) + 1.0;
-                    present = (long long)((double)ti.qpcVBlank + k * period);
-                }
-            }
-
-            if (present == lastPresent) {
-                Sleep(1);
-                continue;
-            }
-
-            lastPresent = present;
-
-            if (!haveT0) {
-                t0 = present;
-                haveT0 = true;
-            }
-
-            const double ms = (double)(present - t0) * 1000.0 / fq;
-            const double t = ms / durMs;
-            const double wallMs = (double)(now.QuadPart - wall0.QuadPart) * 1000.0 / fq;
-
-            if (t >= 1.0 || wallMs > durMs * 2.0 + 300.0) break;
-
-            Frame(t);
-        }
-
-        if (m_kind == Open) {
-            Frame(1.0);
-            g_api.DwmFlush();
-        }
-
-        if (mm && g_api.AvRevertMmThreadCharacteristics)
-            g_api.AvRevertMmThreadCharacteristics(mm);
-
-        SetThreadPriority(th, oldPrio);
+    if (rising) {
+        MacGenieUndoRisingHide(hWnd, data->originalExStyle, data->hiddenByCloak);
+    } else {
+        MacGenieSetDwmTransitions(hWnd, TRUE);
     }
-
-   private:
-    int DurationMs() const {
-        int ms = g_cfg.minMs;
-
-        switch (m_kind) {
-            case Close: ms = g_cfg.closeMs; break;
-            case Open: ms = g_cfg.openMs; break;
-            default: ms = g_cfg.minMs; break;
-        }
-
-        if (m_slow) ms = std::min(ms * 5, 6000);
-        return ms;
+    if (hFirstShown) CloseHandle(hFirstShown);
+    if (data->hFirstFrameShown) CloseHandle(data->hFirstFrameShown);
+    DeleteObject(data->hBitmap);
+    delete data;
+    {
+        std::lock_guard<std::mutex> lock(g_CacheMutex);
+        g_AnimActive.erase(hWnd);
     }
+    return false;
+}
 
-    void Frame(double t) {
-        double alpha = 1.0;
-        float minification = 1.f;
+DWORD WINAPI MacGenieLaunchThread(LPVOID lpParam);
 
-        switch (m_kind) {
-            case Close: {
-                const double scaleT = EaseInQuad(t);
-                const double s = 1.0 - (1.0 - g_cfg.closeScale) * scaleT;
-                alpha = 1.0 - EaseInQuad(t);
-                minification = BuildAffine(m_rows, m_bh, m_cx0, m_cy0, (float)m_aw,
-                                           (float)m_ah, (float)s);
-                break;
-            }
+struct MacGenieGeckoSearch { HWND self; DWORD pid; bool found; };
 
-            case Open: {
-                const double s = g_cfg.openScale + (1.0 - g_cfg.openScale) * EaseOutBack(t);
-                alpha = EaseOutQuint(std::min(1.0, t / 0.65));
-                minification = BuildAffine(m_rows, m_bh, m_cx0, m_cy0, (float)m_aw,
-                                           (float)m_ah, (float)s);
-                break;
-            }
-
-            case Minimize: {
-                if (m_genie) {
-                    const float p = (float)t;
-                    minification = BuildGenie(m_rows, m_bh, m_geo, p);
-                    alpha = 1.0 - SmoothStep((p - 0.85f) / 0.15f);
-                } else {
-                    const float p = (float)EaseInOutCubic(t);
-                    const float s = 1.f + (m_sEnd - 1.f) * p;
-                    const float cx = m_cx0 + (m_cx1 - m_cx0) * p;
-                    const float cy = m_cy0 + (m_cy1 - m_cy0) * p;
-
-                    minification = BuildAffine(m_rows, m_bh, cx, cy, (float)m_aw, (float)m_ah, s);
-                    alpha = 1.0 - SmoothStep((p - 0.6f) / 0.4f);
-                }
-                break;
-            }
-        }
-
-        long long pixels = 0;
-        for (const RowMap& r : m_rows)
-            if (r.cov > 0.f) pixels += (long long)(r.xr - r.xl);
-
-        FrameCtx& c = m_renderer.ctx;
-        c.py = &m_pyr;
-        c.rows = m_rows.data();
-        c.spans = m_spans.data();
-        c.frame = (uint32_t*)m_frame.bits;
-        c.bw = m_bw;
-        c.bh = m_bh;
-
-        PickLevels(m_pyr, minification, &c.lvA, &c.lvB, &c.lf);
-        m_renderer.Run(pixels);
-
-        RECT dirty = {m_bw, m_bh, 0, 0};
-
-        for (int y = 0; y < m_bh; y++) {
-            const RowSpan& sp = m_spans[y];
-            if (sp.dirR < sp.dirL) continue;
-
-            dirty.left = std::min<LONG>(dirty.left, sp.dirL);
-            dirty.right = std::max<LONG>(dirty.right, sp.dirR + 1);
-            dirty.top = std::min<LONG>(dirty.top, y);
-            dirty.bottom = std::max<LONG>(dirty.bottom, y + 1);
-        }
-
-        POINT ptSrc = {0, 0};
-        SIZE sz = {m_bw, m_bh};
-
-        int alphaByte = (int)(alpha * 255.0 + 0.5);
-        alphaByte = std::clamp(alphaByte, 0, 255);
-
-        BLENDFUNCTION bf = {AC_SRC_OVER, 0, (BYTE)alphaByte, AC_SRC_ALPHA};
-
-        UPDATELAYEREDWINDOWINFO info = {};
-        info.cbSize = sizeof(info);
-        info.pptDst = &m_pos;
-        info.psize = &sz;
-        info.hdcSrc = m_frame.dc;
-        info.pptSrc = &ptSrc;
-        info.pblend = &bf;
-        info.dwFlags = ULW_ALPHA;
-        info.prcDirty = (!m_firstUpdate && dirty.right > dirty.left && dirty.bottom > dirty.top)
-                            ? &dirty
-                            : nullptr;
-
-        UpdateLayeredWindowIndirect(m_overlay, &info);
-        m_firstUpdate = false;
+static BOOL CALLBACK MacGenieFindOtherGeckoWindow(HWND w, LPARAM lp) {
+    MacGenieGeckoSearch* s = (MacGenieGeckoSearch*)lp;
+    if (w == s->self || (!IsWindowVisible(w) && !IsIconic(w)) ||
+        GetAncestor(w, GA_ROOT) != w) {
+        return TRUE;
     }
-
-    void End() {
-        if (m_cloaked) {
-            if (IsWindow(m_target)) {
-                BOOL off = FALSE;
-                g_api.DwmSetWindowAttribute(m_target, kDwmCloak, &off, sizeof(off));
-                if (m_overlay) g_api.DwmFlush();
-            }
-            m_cloaked = false;
-        }
-
-        if (m_overlay) {
-            DestroyWindow_Original(m_overlay);
-            m_overlay = nullptr;
-        }
-
-        if (m_transDisabled) {
-            if (IsWindow(m_target)) {
-                BOOL off = FALSE;
-                g_api.DwmSetWindowAttribute(m_target, kDwmTransitionsForceDisabled, &off,
-                                            sizeof(off));
-            }
-            m_transDisabled = false;
-        }
-
-        m_art.Free();
-        m_frame.Free();
-
-        if (m_oldDpi && g_api.SetThreadDpiAwarenessContext)
-            g_api.SetThreadDpiAwarenessContext(m_oldDpi);
-
-        m_oldDpi = nullptr;
-
-        if (m_started) t_busy = false;
-        m_started = false;
+    DWORD pid = 0;
+    GetWindowThreadProcessId(w, &pid);
+    WCHAR cls[64];
+    if (pid == s->pid && GetClassNameW(w, cls, ARRAYSIZE(cls)) &&
+        _wcsicmp(cls, L"MozillaWindowClass") == 0) {
+        s->found = true;
+        return FALSE;
     }
+    return TRUE;
+}
 
-    HWND m_target = nullptr;
-    HWND m_overlay = nullptr;
-    HANDLE m_oldDpi = nullptr;
-    Kind m_kind = Close;
-
-    bool m_started = false;
-    bool m_transDisabled = false;
-    bool m_cloaked = false;
-    bool m_genie = false;
-    bool m_slow = false;
-    bool m_firstUpdate = true;
-
-    int m_aw = 0, m_ah = 0;
-    int m_bw = 0, m_bh = 0;
-    POINT m_pos = {};
-
-    float m_cx0 = 0, m_cy0 = 0, m_cx1 = 0, m_cy1 = 0, m_sEnd = 0.1f;
-
-    GenieGeom m_geo;
-    std::vector<RowMap> m_rows;
-    std::vector<RowSpan> m_spans;
-
-    Surface m_art, m_frame;
-    Pyramid m_pyr;
-    Renderer m_renderer;
-};
-
-bool SafePrepare(Anim& anim, HWND hwnd, Anim::Kind kind) {
-    try {
-        return anim.Prepare(hwnd, kind);
-    } catch (...) {
+static bool MacGenieIsFirstGeckoWindow(HWND hWnd) {
+    WCHAR cls[64];
+    if (!GetClassNameW(hWnd, cls, ARRAYSIZE(cls)) ||
+        _wcsicmp(cls, L"MozillaWindowClass") != 0) {
         return false;
     }
+    DWORD pid = 0;
+    GetWindowThreadProcessId(hWnd, &pid);
+    MacGenieGeckoSearch search = { hWnd, pid, false };
+    EnumWindows(MacGenieFindOtherGeckoWindow, (LPARAM)&search);
+    return !search.found;
 }
 
-bool IsMinimizeCmd(int cmd) {
-    return cmd == SW_MINIMIZE || cmd == SW_SHOWMINIMIZED || cmd == SW_SHOWMINNOACTIVE ||
-           cmd == SW_FORCEMINIMIZE;
-}
-
-bool IsShowCmd(int cmd) {
-    return cmd == SW_SHOWNORMAL || cmd == SW_SHOW || cmd == SW_SHOWDEFAULT ||
-           cmd == SW_SHOWMAXIMIZED;
-}
-
-BOOL OpenWithAnimation(HWND hWnd, int cmd) {
-    BOOL on = TRUE;
-    if (FAILED(g_api.DwmSetWindowAttribute(hWnd, kDwmCloak, &on, sizeof(on))))
-        return ShowWindow_Original(hWnd, cmd);
-
-    Anim anim;
-    anim.MarkCloaked(hWnd);
-
-    BOOL ret = ShowWindow_Original(hWnd, cmd);
-
-    if (IsWindowVisible(hWnd)) {
-        RedrawWindow(hWnd, nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW | RDW_ALLCHILDREN);
-        if (SafePrepare(anim, hWnd, Anim::Open)) anim.Play();
+static bool MacGenieLaunchPrepare(HWND hWnd, int nCmdShow, LONG_PTR* origExOut,
+                                  BOOL* cloakedOut) {
+    if (g_unloading.load(std::memory_order_relaxed)) return false;
+    if (!g_launchAnimation.load(std::memory_order_relaxed)) return false;
+    if (nCmdShow != SW_SHOW && nCmdShow != SW_SHOWNORMAL &&
+        nCmdShow != SW_SHOWDEFAULT && nCmdShow != SW_SHOWMAXIMIZED) return false;
+    if (IsWindowVisible(hWnd) || IsIconic(hWnd)) return false;
+    if (!MacGenieIsLaunchWindow(hWnd)) return false;
+    {
+        std::lock_guard<std::mutex> lock(g_CacheMutex);
+        if (!g_LaunchSeen.insert(hWnd).second) return false;
     }
+    if (MacGenieIsExcluded(hWnd)) return false;
+    LONG_PTR exStyle = GetWindowLongPtrW(hWnd, GWL_EXSTYLE);
+    *origExOut = exStyle;
+    MacGenieSetDwmTransitions(hWnd, FALSE);
 
-    return ret;
+    UINT cloaked = 0;
+    bool appCloaked =
+        SUCCEEDED(DwmGetWindowAttribute(hWnd, DWMWA_CLOAKED, &cloaked, sizeof(cloaked))) &&
+        (cloaked & DWM_CLOAKED_APP);
+    BOOL cloak = TRUE;
+    if (!appCloaked && !MacGenieIsFirstGeckoWindow(hWnd) &&
+        SUCCEEDED(DwmSetWindowAttribute(hWnd, DWMWA_CLOAK, &cloak, sizeof(cloak)))) {
+        *cloakedOut = TRUE;
+        return true;
+    }
+    SetWindowLongPtrW(hWnd, GWL_EXSTYLE, exStyle | WS_EX_LAYERED);
+    SetLayeredWindowAttributes(hWnd, 0, 0, LWA_ALPHA);
+    *cloakedOut = FALSE;
+    return true;
+}
+
+static void MacGenieLaunchCommit(HWND hWnd, LONG_PTR originalExStyle, BOOL cloaked) {
+    MacGenieLaunchData* ld = new MacGenieLaunchData();
+    ld->hWnd = hWnd;
+    ld->originalExStyle = originalExStyle;
+    ld->hiddenByCloak = cloaked;
+    if (!MacGenieSpawnWorker(MacGenieLaunchThread, ld)) {
+        delete ld;
+        MacGenieUndoRisingHide(hWnd, originalExStyle, cloaked);
+    }
+}
+
+static bool MacGenieIsCloaked(HWND hWnd) {
+    UINT cloaked = 0;
+    return SUCCEEDED(DwmGetWindowAttribute(hWnd, DWMWA_CLOAKED, &cloaked, sizeof(cloaked))) &&
+           cloaked;
+}
+
+static void MacGenieClearCloseHandled(HWND hWnd) {
+    if (GetPropW(hWnd, L"GenieCloseHandled")) RemovePropW(hWnd, L"GenieCloseHandled");
+}
+
+static bool MacGenieMarkCloseAndCloak(HWND hWnd) {
+    std::lock_guard<std::mutex> lock(g_WorkerThreadsMutex);
+    if (g_unloading.load(std::memory_order_relaxed)) return false;
+    SetPropW(hWnd, L"GenieCloseHandled", (HANDLE)1);
+    MacGenieSetCloak(hWnd, TRUE);
+    return true;
+}
+
+static void MacGenieWaitCloseAnim(HWND hWnd, DWORD timeoutMs) {
+    const DWORD start = GetTickCount();
+    while (IsWindow(hWnd) && !g_unloading.load(std::memory_order_relaxed)) {
+        {
+            std::lock_guard<std::mutex> lock(g_CacheMutex);
+            if (!g_AnimActive.count(hWnd)) break;
+        }
+        const DWORD elapsed = GetTickCount() - start;
+        if (elapsed >= timeoutMs) break;
+        DWORD slice = timeoutMs - elapsed;
+        if (slice > 10) slice = 10;
+        if (MsgWaitForMultipleObjectsEx(0, nullptr, slice, QS_SENDMESSAGE,
+                                        MWMO_INPUTAVAILABLE) == WAIT_OBJECT_0) {
+            MSG msg;
+            PeekMessageW(&msg, nullptr, 0, 0, PM_NOREMOVE | PM_QS_SENDMESSAGE);
+        }
+    }
+}
+
+struct MacGenieOtherWindowSearch { HWND self; DWORD pid; bool found; };
+
+static BOOL CALLBACK MacGenieFindOtherAppWindow(HWND w, LPARAM lp) {
+    MacGenieOtherWindowSearch* s = (MacGenieOtherWindowSearch*)lp;
+    if (w == s->self || !IsWindowVisible(w) || GetAncestor(w, GA_ROOT) != w ||
+        GetWindow(w, GW_OWNER) ||
+        (GetWindowLongPtrW(w, GWL_EXSTYLE) & WS_EX_TOOLWINDOW)) {
+        return TRUE;
+    }
+    DWORD pid = 0;
+    GetWindowThreadProcessId(w, &pid);
+    if (pid == s->pid && !MacGenieIsCloaked(w)) {
+        s->found = true;
+        return FALSE;
+    }
+    return TRUE;
+}
+
+static bool MacGenieHasOtherAppWindow(HWND hWnd) {
+    MacGenieOtherWindowSearch search = { hWnd, GetCurrentProcessId(), false };
+    EnumWindows(MacGenieFindOtherAppWindow, (LPARAM)&search);
+    return search.found;
+}
+
+static bool MacGenieStartClose(HWND hWnd, UINT closeMsg) {
+    MacGenieSetDwmTransitions(hWnd, FALSE);
+    SetPropW(hWnd, L"GenieCloseAnimating", (HANDLE)1);
+    if (StartMacGenieAnim(hWnd, FALSE, GetWindowLongPtrW(hWnd, GWL_EXSTYLE),
+                          FALSE, FALSE, FALSE, NULL, TRUE, closeMsg)) {
+        if (MacGenieMarkCloseAndCloak(hWnd)) return true;
+        RemovePropW(hWnd, L"GenieCloseAnimating");
+        return false;
+    }
+    RemovePropW(hWnd, L"GenieCloseAnimating");
+    MacGenieSetDwmTransitions(hWnd, TRUE);
+    return false;
+}
+
+static bool MacGenieIsPopupClass(const WCHAR* cls) {
+    static const WCHAR* const kClasses[] = {
+        L"Xaml_WindowedPopupClass", L"Popup", L"Overlay", L"ToolTip",
+        L"CoreWindow", L"ApplicationFrameWindow", L"XamlExplorerHostIslandWindow",
+        L"Windows.Internal.Shell.TabProxyWindow",
+    };
+    for (const WCHAR* c : kClasses) {
+        if (_wcsicmp(cls, c) == 0) return true;
+    }
+    return false;
+}
+
+static bool MacGenieIsExplorerProcess() {
+    static const bool isExplorer = [] {
+        WCHAR path[MAX_PATH];
+        DWORD len = GetModuleFileNameW(NULL, path, MAX_PATH);
+        if (!len || len >= MAX_PATH) return false;
+        const WCHAR* name = wcsrchr(path, L'\\');
+        return _wcsicmp(name ? name + 1 : path, L"explorer.exe") == 0;
+    }();
+    return isExplorer;
+}
+
+static bool MacGenieIsBlockedShellWindow(const WCHAR* cls) {
+    return MacGenieIsExplorerProcess() &&
+           _wcsicmp(cls, L"CabinetWClass") != 0 && _wcsicmp(cls, L"ExploreWClass") != 0;
+}
+
+static bool MacGenieIsCloseTarget(HWND hWnd) {
+    if (!g_closeAnimation.load(std::memory_order_relaxed)) return false;
+    if (!hWnd || !IsWindowVisible(hWnd) || IsIconic(hWnd) ||
+        GetAncestor(hWnd, GA_ROOT) != hWnd ||
+        GetWindowThreadProcessId(hWnd, nullptr) != GetCurrentThreadId()) {
+        return false;
+    }
+    LONG_PTR style = GetWindowLongPtrW(hWnd, GWL_STYLE);
+    LONG_PTR exStyle = GetWindowLongPtrW(hWnd, GWL_EXSTYLE);
+    if ((style & WS_CHILD) || (exStyle & WS_EX_TOOLWINDOW) || GetWindow(hWnd, GW_OWNER)) {
+        return false;
+    }
+    WCHAR cls[128];
+    if (!GetClassNameW(hWnd, cls, ARRAYSIZE(cls)) || MacGenieIsPopupClass(cls) ||
+        MacGenieIsBlockedShellWindow(cls)) {
+        return false;
+    }
+    if (MacGenieIsCloaked(hWnd)) return false;
+    RECT r;
+    return GetWindowRect(hWnd, &r) && r.right - r.left >= 300 && r.bottom - r.top >= 300;
+}
+
+static bool MacGenieIsCloseMessageClass(HWND hWnd) {
+    WCHAR cls[128];
+    if (!hWnd || !GetClassNameW(hWnd, cls, ARRAYSIZE(cls))) return false;
+    return _wcsicmp(cls, L"ConsoleWindowClass") == 0 ||
+           _wcsicmp(cls, L"CASCADIA_HOSTING_WINDOW_CLASS") == 0 ||
+           _wcsicmp(cls, L"TaskManagerWindow") == 0 ||
+           _wcsicmp(cls, L"WinUIDesktopWin32WindowClass") == 0;
+}
+
+static bool MacGenieShouldTreatHideAsClose(HWND hWnd) {
+    if (!g_closeAnimation.load(std::memory_order_relaxed) ||
+        !g_hideAsClose.load(std::memory_order_relaxed)) {
+        return false;
+    }
+    if (!IsWindow(hWnd) || !IsWindowVisible(hWnd) || IsIconic(hWnd) ||
+        GetAncestor(hWnd, GA_ROOT) != hWnd) {
+        return false;
+    }
+    DWORD pid = 0;
+    GetWindowThreadProcessId(hWnd, &pid);
+    if (pid != GetCurrentProcessId()) return false;
+    LONG_PTR style = GetWindowLongPtrW(hWnd, GWL_STYLE);
+    LONG_PTR exStyle = GetWindowLongPtrW(hWnd, GWL_EXSTYLE);
+    if ((style & WS_CHILD) || (exStyle & WS_EX_TOOLWINDOW) ||
+        GetWindow(hWnd, GW_OWNER) || MacGenieIsCloseMessageClass(hWnd)) {
+        return false;
+    }
+    WCHAR cls[128];
+    if (!GetClassNameW(hWnd, cls, ARRAYSIZE(cls)) || MacGenieIsPopupClass(cls) ||
+        MacGenieIsBlockedShellWindow(cls)) {
+        return false;
+    }
+    if (MacGenieIsCloaked(hWnd)) return false;
+    RECT r;
+    return GetWindowRect(hWnd, &r) && r.right - r.left >= 300 && r.bottom - r.top >= 300;
+}
+
+static bool MacGenieCloseBlocked(HWND hWnd) {
+    return GetPropW(hWnd, L"GenieCloseBypass") || GetPropW(hWnd, L"GenieCloseHandled") ||
+           GetPropW(hWnd, L"GenieCloseAnimating") ||
+           g_unloading.load(std::memory_order_relaxed);
+}
+
+static bool MacGenieAnimateBeforeNativeHide(HWND hWnd) {
+    if (!MacGenieShouldTreatHideAsClose(hWnd) || MacGenieCloseBlocked(hWnd)) return false;
+    if (!MacGenieStartClose(hWnd, WM_DESTROY)) return false;
+    MacGenieWaitCloseAnim(hWnd, 3500);
+    return true;
+}
+
+static void MacGenieFinishNativeHide(HWND hWnd, bool animated) {
+    if (!animated || !IsWindow(hWnd)) return;
+    MacGenieSetCloak(hWnd, FALSE);
+    RemovePropW(hWnd, L"GenieCloseAnimating");
+    MacGenieSetDwmTransitions(hWnd, TRUE);
+}
+
+// HWND values are recycled by Windows. Many apps never forward WM_DESTROY to
+// DefWindowProc, so also forget per-window state when DestroyWindow succeeds,
+// otherwise a recycled handle would inherit "already launched" / a stale dock X.
+static void MacGenieForgetWindow(HWND hWnd) {
+    std::lock_guard<std::mutex> lock(g_CacheMutex);
+    auto it = g_SnapshotCache.find(hWnd);
+    if (it != g_SnapshotCache.end()) {
+        DeleteObject(it->second.hBmp);
+        g_SnapshotCache.erase(it);
+    }
+    g_IconPositions.erase(hWnd);
+    g_LaunchSeen.erase(hWnd);
 }
 
 BOOL WINAPI DestroyWindow_Hook(HWND hWnd) {
-    Anim anim;
-    bool on = false;
-
-    if (g_cfg.closeOn && ShouldAnimateVisible(hWnd))
-        on = SafePrepare(anim, hWnd, Anim::Close);
-
-    BOOL ret = DestroyWindow_Original(hWnd);
-
-    if (on && ret) anim.Play();
-    return ret;
+    bool animated = false;
+    if (MacGenieIsCloseTarget(hWnd) && !MacGenieCloseBlocked(hWnd)) {
+        animated = MacGenieStartClose(hWnd, WM_DESTROY);
+        if (animated && !MacGenieHasOtherAppWindow(hWnd)) MacGenieWaitCloseAnim(hWnd, 4000);
+    }
+    BOOL result = DestroyWindow_Original(hWnd);
+    if (result) MacGenieForgetWindow(hWnd);
+    if (!result && animated && IsWindow(hWnd)) {
+        RemovePropW(hWnd, L"GenieCloseHandled");
+        RemovePropW(hWnd, L"GenieCloseAnimating");
+        MacGenieSetCloak(hWnd, FALSE);
+        MacGenieSetDwmTransitions(hWnd, TRUE);
+    }
+    return result;
 }
 
 BOOL WINAPI ShowWindow_Hook(HWND hWnd, int nCmdShow) {
     if (nCmdShow == SW_HIDE) {
-        if (!g_cfg.closeOn || !g_cfg.animateHide || !ShouldAnimateVisible(hWnd))
-            return ShowWindow_Original(hWnd, nCmdShow);
+        bool animated = MacGenieAnimateBeforeNativeHide(hWnd);
+        BOOL res = ShowWindow_Original(hWnd, nCmdShow);
+        MacGenieFinishNativeHide(hWnd, animated);
+        return res;
+    }
+    MacGenieClearCloseHandled(hWnd);
 
-        Anim anim;
-        const bool on = SafePrepare(anim, hWnd, Anim::Close);
-
-        BOOL ret = ShowWindow_Original(hWnd, nCmdShow);
-
-        if (on && !IsWindowVisible(hWnd)) anim.Play();
-        return ret;
+    if (nCmdShow == SW_MINIMIZE || nCmdShow == SW_SHOWMINIMIZED || nCmdShow == SW_SHOWMINNOACTIVE) {
+        if (MacGenieShouldAnimate(hWnd)) {
+            MacGenieSetDwmTransitions(hWnd, FALSE);
+            StartMacGenieAnim(hWnd, FALSE, GetWindowLongPtrW(hWnd, GWL_EXSTYLE));
+        }
+        return ShowWindow_Original(hWnd, nCmdShow);
     }
 
-    if (IsMinimizeCmd(nCmdShow)) {
-        if (g_cfg.minStyle == MinStyle::Off || !CanMinimize(hWnd) || !ShouldAnimateVisible(hWnd))
-            return ShowWindow_Original(hWnd, nCmdShow);
-
-        Anim anim;
-        const bool on = SafePrepare(anim, hWnd, Anim::Minimize);
-
-        BOOL ret = ShowWindow_Original(hWnd, nCmdShow);
-
-        if (on && IsIconic(hWnd)) anim.Play();
-        return ret;
+    if ((nCmdShow == SW_RESTORE || nCmdShow == SW_SHOWNORMAL) && IsIconic(hWnd)) {
+        if (g_openAnimation.load(std::memory_order_relaxed) && MacGenieShouldAnimate(hWnd)) {
+            MacGenieSetDwmTransitions(hWnd, FALSE);
+            MacGenieSetCloak(hWnd, TRUE);
+            BOOL res = ShowWindow_Original(hWnd, nCmdShow);
+            StartMacGenieAnim(hWnd, TRUE, GetWindowLongPtrW(hWnd, GWL_EXSTYLE), TRUE);
+            return res;
+        }
+        return ShowWindow_Original(hWnd, nCmdShow);
     }
 
-    if (g_cfg.openOn && IsShowCmd(nCmdShow) && ShouldAnimateOpen(hWnd))
-        return OpenWithAnimation(hWnd, nCmdShow);
+    LONG_PTR launchOrigEx;
+    BOOL launchCloaked;
+    if (MacGenieLaunchPrepare(hWnd, nCmdShow, &launchOrigEx, &launchCloaked)) {
+        BOOL res = ShowWindow_Original(hWnd, nCmdShow);
+        MacGenieLaunchCommit(hWnd, launchOrigEx, launchCloaked);
+        return res;
+    }
 
     return ShowWindow_Original(hWnd, nCmdShow);
 }
 
-LRESULT DefProcImpl(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam, DefProc_t orig) {
-    if (msg == WM_CLOSE && g_cfg.closeOn) {
-        if (!ShouldAnimateVisible(hWnd)) return orig(hWnd, msg, wParam, lParam);
-
-        Anim anim;
-        const bool on = SafePrepare(anim, hWnd, Anim::Close);
-
-        LRESULT r = orig(hWnd, msg, wParam, lParam);
-
-        if (on && !IsWindow(hWnd)) anim.Play();
-        return r;
+LRESULT WINAPI DefWindowProcW_Hook(HWND hWnd, UINT Msg, WPARAM wParam, LPARAM lParam) {
+    if (Msg == WM_SHOWWINDOW && wParam && !IsIconic(hWnd)) {
+        MacGenieClearCloseHandled(hWnd);
     }
 
-    if (msg == WM_SYSCOMMAND && (wParam & 0xFFF0) == SC_MINIMIZE &&
-        g_cfg.minStyle != MinStyle::Off) {
-        if (!CanMinimize(hWnd) || !ShouldAnimateVisible(hWnd))
-            return orig(hWnd, msg, wParam, lParam);
-
-        Anim anim;
-        const bool on = SafePrepare(anim, hWnd, Anim::Minimize);
-
-        LRESULT r = orig(hWnd, msg, wParam, lParam);
-
-        if (on && IsIconic(hWnd)) anim.Play();
-        return r;
+    bool closeMessage = Msg == WM_CLOSE ||
+                        (Msg == WM_SYSCOMMAND && (wParam & 0xFFF0) == SC_CLOSE);
+    if (closeMessage && GetPropW(hWnd, L"GenieCloseBypass")) {
+        if (Msg == WM_CLOSE) RemovePropW(hWnd, L"GenieCloseBypass");
+        return DefWindowProcW_Original(hWnd, Msg, wParam, lParam);
+    }
+    if (closeMessage && IsWindowVisible(hWnd) && GetPropW(hWnd, L"GenieCloseAnimating")) {
+        return 0;
+    }
+    if (closeMessage && g_closeAnimation.load(std::memory_order_relaxed) &&
+        MacGenieIsCloseMessageClass(hWnd) &&
+        IsWindowVisible(hWnd) && !IsIconic(hWnd) && GetAncestor(hWnd, GA_ROOT) == hWnd &&
+        !MacGenieIsCloaked(hWnd) && !MacGenieCloseBlocked(hWnd)) {
+        if (MacGenieStartClose(hWnd, Msg)) return 0;
     }
 
-    return orig(hWnd, msg, wParam, lParam);
-}
-
-LRESULT WINAPI DefWindowProcW_Hook(HWND h, UINT m, WPARAM w, LPARAM l) {
-    return DefProcImpl(h, m, w, l, DefWindowProcW_Original);
-}
-
-LRESULT WINAPI DefWindowProcA_Hook(HWND h, UINT m, WPARAM w, LPARAM l) {
-    return DefProcImpl(h, m, w, l, DefWindowProcA_Original);
-}
-
-std::wstring GetStr(PCWSTR name) {
-    PCWSTR s = Wh_GetStringSetting(name);
-    std::wstring r = s ? s : L"";
-    if (s) Wh_FreeStringSetting(s);
-    return r;
-}
-
-void LoadSettings() {
-    g_cfg.closeOn = Wh_GetIntSetting(L"closeEnabled") != 0;
-    g_cfg.closeMs = std::clamp((int)Wh_GetIntSetting(L"closeDuration"), 60, 1000);
-    g_cfg.closeScale = std::clamp((int)Wh_GetIntSetting(L"closeScale"), 50, 100) / 100.0;
-
-    g_cfg.openOn = Wh_GetIntSetting(L"openEnabled") != 0;
-    g_cfg.openMs = std::clamp((int)Wh_GetIntSetting(L"openDuration"), 60, 1000);
-    g_cfg.openScale = std::clamp((int)Wh_GetIntSetting(L"openScale"), 50, 100) / 100.0;
-
-    g_cfg.minMs = std::clamp((int)Wh_GetIntSetting(L"minimizeDuration"), 100, 2000);
-
-    const std::wstring style = GetStr(L"minimizeStyle");
-    g_cfg.minStyle = style == L"off" ? MinStyle::Off
-                     : style == L"scale" ? MinStyle::Scale
-                                         : MinStyle::Genie;
-
-    g_cfg.genieNearWindow = GetStr(L"genieTarget") == L"window";
-    g_cfg.shiftSlow = Wh_GetIntSetting(L"shiftSlowMotion") != 0;
-
-    g_cfg.shadow = Wh_GetIntSetting(L"shadow") != 0;
-    g_cfg.shadowAlpha = std::clamp((int)Wh_GetIntSetting(L"shadowStrength"), 0, 100) / 100.0f;
-
-    g_cfg.animateHide = Wh_GetIntSetting(L"animateHide") != 0;
-    g_cfg.hookDefProc = Wh_GetIntSetting(L"hookDefWindowProc") != 0;
-
-    g_cfg.excluded.clear();
-
-    for (int i = 0;; i++) {
-        PCWSTR s = Wh_GetStringSetting(L"excludedPrograms[%d]", i);
-        bool has = s && *s;
-
-        if (has) g_cfg.excluded.emplace_back(s);
-        if (s) Wh_FreeStringSetting(s);
-
-        if (!has) break;
+    if (Msg == WM_DESTROY) {
+        RemovePropW(hWnd, L"GenieCloseHandled");
+        RemovePropW(hWnd, L"GenieCloseAnimating");
+        RemovePropW(hWnd, L"GenieCloseBypass");
+        MacGenieForgetWindow(hWnd);
     }
+
+    if (Msg == WM_SYSCOMMAND) {
+        UINT cmd = wParam & 0xFFF0;
+        if (cmd == SC_MINIMIZE) {
+            if (GetPropW(hWnd, L"GenieBypass")) {
+                return DefWindowProcW_Original(hWnd, Msg, wParam, lParam);
+            }
+            if (MacGenieShouldAnimate(hWnd)) {
+                BOOL requestedUnhide = FALSE;
+                HWND hNext = NULL;
+                if (g_unhideEnabled.load(std::memory_order_relaxed)) {
+                    HWND hTray = FindTaskbarForMonitor(MonitorFromWindow(hWnd, MONITOR_DEFAULTTONEAREST));
+                    if (hTray) {
+                        APPBARDATA abd = { sizeof(APPBARDATA) };
+                        abd.hWnd = hTray;
+                        UINT uState = (UINT)SHAppBarMessage(ABM_GETSTATE, &abd);
+                        if (uState & ABS_AUTOHIDE) {
+                            requestedUnhide = TRUE;
+                            HWND hwndIter = GetWindow(hWnd, GW_HWNDNEXT);
+                            while (hwndIter) {
+                                if (IsWindowVisible(hwndIter) && !IsIconic(hwndIter) &&
+                                    GetAncestor(hwndIter, GA_ROOT) == hwndIter &&
+                                    GetWindowTextLengthW(hwndIter) > 0 &&
+                                    hwndIter != hWnd && hwndIter != hTray) {
+                                    DWORD exStyle = GetWindowLongPtrW(hwndIter, GWL_EXSTYLE);
+                                    if (!(exStyle & WS_EX_TOOLWINDOW)) { hNext = hwndIter; break; }
+                                }
+                                hwndIter = GetWindow(hwndIter, GW_HWNDNEXT);
+                            }
+                            SetForegroundWindow(hTray);
+                        }
+                    }
+                }
+
+                MacGenieSetDwmTransitions(hWnd, FALSE);
+                if (requestedUnhide) {
+                    bool ok = StartMacGenieAnim(hWnd, FALSE, GetWindowLongPtrW(hWnd, GWL_EXSTYLE),
+                                                FALSE, TRUE, TRUE, hNext);
+                    if (ok) {
+                        MacGenieSetCloak(hWnd, TRUE);
+                        return 0;
+                    }
+                    return DefWindowProcW_Original(hWnd, Msg, wParam, lParam);
+                }
+                StartMacGenieAnim(hWnd, FALSE, GetWindowLongPtrW(hWnd, GWL_EXSTYLE));
+            }
+            return DefWindowProcW_Original(hWnd, Msg, wParam, lParam);
+        }
+        else if (cmd == SC_RESTORE && IsIconic(hWnd) &&
+                 g_openAnimation.load(std::memory_order_relaxed) &&
+                 MacGenieShouldAnimate(hWnd)) {
+            MacGenieSetDwmTransitions(hWnd, FALSE);
+            MacGenieSetCloak(hWnd, TRUE);
+            LRESULT res = DefWindowProcW_Original(hWnd, Msg, wParam, lParam);
+            StartMacGenieAnim(hWnd, TRUE, GetWindowLongPtrW(hWnd, GWL_EXSTYLE), TRUE);
+            return res;
+        }
+    }
+    return DefWindowProcW_Original(hWnd, Msg, wParam, lParam);
 }
 
-bool IsExcludedProcess() {
-    WCHAR path[MAX_PATH] = {};
-    GetModuleFileNameW(nullptr, path, MAX_PATH);
-
-    const WCHAR* name = wcsrchr(path, L'\\');
-    name = name ? name + 1 : path;
-
-    for (const auto& e : g_cfg.excluded)
-        if (_wcsicmp(name, e.c_str()) == 0) return true;
-
-    return false;
+static void MacGenieTryMinimizeAnim(HWND hWnd) {
+    if (!IsWindowVisible(hWnd) || IsIconic(hWnd)) return;
+    if (!MacGenieShouldAnimate(hWnd)) return;
+    MacGenieSetDwmTransitions(hWnd, FALSE);
+    StartMacGenieAnim(hWnd, FALSE, GetWindowLongPtrW(hWnd, GWL_EXSTYLE));
 }
 
-}  // namespace
+BOOL WINAPI ShowWindowAsync_Hook(HWND hWnd, int nCmdShow) {
+    if (nCmdShow == SW_HIDE) {
+        if (MacGenieShouldTreatHideAsClose(hWnd) && !MacGenieCloseBlocked(hWnd) &&
+            MacGenieStartClose(hWnd, MACGENIE_ASYNC_HIDE)) {
+            return TRUE;
+        }
+        return ShowWindowAsync_Original(hWnd, nCmdShow);
+    }
+    MacGenieClearCloseHandled(hWnd);
+
+    if (nCmdShow == SW_MINIMIZE || nCmdShow == SW_SHOWMINIMIZED ||
+        nCmdShow == SW_SHOWMINNOACTIVE) {
+        MacGenieTryMinimizeAnim(hWnd);
+    } else {
+        LONG_PTR launchOrigEx;
+        BOOL launchCloaked;
+        if (MacGenieLaunchPrepare(hWnd, nCmdShow, &launchOrigEx, &launchCloaked)) {
+            BOOL res = ShowWindowAsync_Original(hWnd, nCmdShow);
+            MacGenieLaunchCommit(hWnd, launchOrigEx, launchCloaked);
+            return res;
+        }
+    }
+    return ShowWindowAsync_Original(hWnd, nCmdShow);
+}
+
+BOOL WINAPI SetWindowPlacement_Hook(HWND hWnd, const WINDOWPLACEMENT* lpwndpl) {
+    if (lpwndpl && lpwndpl->showCmd == SW_HIDE &&
+        !(lpwndpl->flags & WPF_ASYNCWINDOWPLACEMENT)) {
+        bool animated = MacGenieAnimateBeforeNativeHide(hWnd);
+        BOOL res = SetWindowPlacement_Original(hWnd, lpwndpl);
+        MacGenieFinishNativeHide(hWnd, animated);
+        return res;
+    }
+    if (lpwndpl && lpwndpl->showCmd != SW_HIDE && lpwndpl->showCmd != SW_MINIMIZE &&
+        lpwndpl->showCmd != SW_SHOWMINIMIZED && lpwndpl->showCmd != SW_SHOWMINNOACTIVE) {
+        MacGenieClearCloseHandled(hWnd);
+    }
+    if (lpwndpl && (lpwndpl->showCmd == SW_MINIMIZE ||
+                    lpwndpl->showCmd == SW_SHOWMINIMIZED ||
+                    lpwndpl->showCmd == SW_SHOWMINNOACTIVE)) {
+        MacGenieTryMinimizeAnim(hWnd);
+    }
+    return SetWindowPlacement_Original(hWnd, lpwndpl);
+}
+
+BOOL WINAPI CloseWindow_Hook(HWND hWnd) {
+    MacGenieTryMinimizeAnim(hWnd);
+    return CloseWindow_Original(hWnd);
+}
+
+BOOL WINAPI SetWindowPos_Hook(HWND hWnd, HWND hWndInsertAfter, int X, int Y,
+                              int cx, int cy, UINT uFlags) {
+    if ((uFlags & SWP_HIDEWINDOW) && !(uFlags & SWP_ASYNCWINDOWPOS)) {
+        bool animated = MacGenieAnimateBeforeNativeHide(hWnd);
+        BOOL res = SetWindowPos_Original(hWnd, hWndInsertAfter, X, Y, cx, cy, uFlags);
+        MacGenieFinishNativeHide(hWnd, animated);
+        return res;
+    }
+    if (uFlags & SWP_SHOWWINDOW) {
+        MacGenieClearCloseHandled(hWnd);
+        LONG_PTR launchOrigEx;
+        BOOL launchCloaked;
+        if (MacGenieLaunchPrepare(hWnd, SW_SHOW, &launchOrigEx, &launchCloaked)) {
+            BOOL res = SetWindowPos_Original(hWnd, hWndInsertAfter, X, Y, cx, cy, uFlags);
+            MacGenieLaunchCommit(hWnd, launchOrigEx, launchCloaked);
+            return res;
+        }
+    }
+    return SetWindowPos_Original(hWnd, hWndInsertAfter, X, Y, cx, cy, uFlags);
+}
+
+DWORD WINAPI MacGenieLaunchThread(LPVOID lpParam) {
+    MacGenieLaunchData* ld = (MacGenieLaunchData*)lpParam;
+    HWND hWnd = ld->hWnd;
+    LONG_PTR originalExStyle = ld->originalExStyle;
+    BOOL hiddenByCloak = ld->hiddenByCloak;
+    delete ld;
+
+    UINT ownCloak = hiddenByCloak ? (UINT)DWM_CLOAKED_APP : 0;
+    Sleep(60);
+    for (int i = 0; i < 30; ++i) {
+        if (!IsWindow(hWnd) || g_unloading.load(std::memory_order_relaxed)) break;
+        UINT cloaked = 0;
+        if (FAILED(DwmGetWindowAttribute(hWnd, DWMWA_CLOAKED, &cloaked, sizeof(cloaked))) ||
+            !(cloaked & ~ownCloak)) {
+            break;
+        }
+        Sleep(50);
+    }
+
+    if (g_unloading.load(std::memory_order_relaxed) ||
+        !IsWindow(hWnd) || IsIconic(hWnd) || !IsWindowVisible(hWnd)) {
+        if (IsWindow(hWnd)) {
+            MacGenieUndoRisingHide(hWnd, originalExStyle, hiddenByCloak);
+        }
+        return 0;
+    }
+
+    StartMacGenieAnim(hWnd, TRUE, originalExStyle, hiddenByCloak, FALSE, FALSE, NULL, FALSE, WM_DESTROY, TRUE);
+    return 0;
+}
 
 BOOL Wh_ModInit() {
-    LoadSettings();
+    MacGenieLoadSettings();
 
-    if (IsExcludedProcess()) return FALSE;
-    if (!LoadImports()) return FALSE;
+    HRESULT hr = D2D1CreateFactory(D2D1_FACTORY_TYPE_MULTI_THREADED, IID_ID2D1Factory_Guid, reinterpret_cast<void**>(&g_d2dFactory));
+    if (FAILED(hr)) g_d2dFactory = nullptr;
 
-    Wh_SetFunctionHook((void*)DestroyWindow, (void*)DestroyWindow_Hook,
-                       (void**)&DestroyWindow_Original);
-
-    Wh_SetFunctionHook((void*)ShowWindow, (void*)ShowWindow_Hook,
-                       (void**)&ShowWindow_Original);
-
-    if (g_cfg.hookDefProc) {
-        Wh_SetFunctionHook((void*)DefWindowProcW, (void*)DefWindowProcW_Hook,
-                           (void**)&DefWindowProcW_Original);
-
-        Wh_SetFunctionHook((void*)DefWindowProcA, (void*)DefWindowProcA_Hook,
-                           (void**)&DefWindowProcA_Original);
-    }
-
+    Wh_SetFunctionHook((void*)DefWindowProcW, (void*)DefWindowProcW_Hook, (void**)&DefWindowProcW_Original);
+    Wh_SetFunctionHook((void*)DestroyWindow, (void*)DestroyWindow_Hook, (void**)&DestroyWindow_Original);
+    Wh_SetFunctionHook((void*)ShowWindow, (void*)ShowWindow_Hook, (void**)&ShowWindow_Original);
+    Wh_SetFunctionHook((void*)ShowWindowAsync, (void*)ShowWindowAsync_Hook, (void**)&ShowWindowAsync_Original);
+    Wh_SetFunctionHook((void*)SetWindowPlacement, (void*)SetWindowPlacement_Hook, (void**)&SetWindowPlacement_Original);
+    Wh_SetFunctionHook((void*)CloseWindow, (void*)CloseWindow_Hook, (void**)&CloseWindow_Original);
+    Wh_SetFunctionHook((void*)SetWindowPos, (void*)SetWindowPos_Hook, (void**)&SetWindowPos_Original);
     return TRUE;
-}
-
-void Wh_ModUninit() {
-    AcquireSRWLockExclusive(&g_classLock);
-
-    if (g_classRegistered) {
-        UnregisterClassW(kOverlayClass, GetModuleHandleW(nullptr));
-        g_classRegistered = false;
-    }
-
-    ReleaseSRWLockExclusive(&g_classLock);
 }
 
 BOOL Wh_ModSettingsChanged(BOOL* bReload) {
-    *bReload = TRUE;
+    *bReload = FALSE;
+    MacGenieLoadSettings();
     return TRUE;
+}
+
+void Wh_ModBeforeUninit() {
+    std::lock_guard<std::mutex> lock(g_WorkerThreadsMutex);
+    g_unloading.store(true, std::memory_order_relaxed);
+}
+
+void Wh_ModUninit() {
+    {
+        std::lock_guard<std::mutex> lock(g_WorkerThreadsMutex);
+        g_unloading.store(true, std::memory_order_relaxed);
+    }
+    std::vector<HANDLE> threads;
+    {
+        std::lock_guard<std::mutex> lock(g_WorkerThreadsMutex);
+        threads.swap(g_WorkerThreads);
+    }
+    for (HANDLE h : threads) {
+        WaitForSingleObject(h, INFINITE);
+        CloseHandle(h);
+    }
+
+    if (g_d2dFactory) {
+        g_d2dFactory->Release();
+        g_d2dFactory = nullptr;
+    }
+    {
+        std::lock_guard<std::mutex> uiaLock(g_UiaMutex);
+        g_ButtonCache.clear();
+    }
+    std::lock_guard<std::mutex> lock(g_CacheMutex);
+    for (auto& pair : g_SnapshotCache) {
+        DeleteObject(pair.second.hBmp);
+    }
+    g_SnapshotCache.clear();
+    g_IconPositions.clear();
+    g_ProcessIconPositions.clear();
+    g_LaunchSeen.clear();
 }
